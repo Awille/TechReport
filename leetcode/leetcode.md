@@ -106,7 +106,58 @@ class Solution {
 
 跟上面一样，只是在每一层添加list时 判断要不要reverse一下。
 
+### [207. 课程表](https://leetcode.cn/problems/course-schedule/) -  拓扑排序
 
+你这个学期必须选修 numCourses 门课程，记为 0 到 numCourses - 1 。
 
+在选修某些课程之前需要一些先修课程。 先修课程按数组 prerequisites 给出，其中 prerequisites[i] = [ai, bi] ，表示如果要学习课程 ai 则 必须 先学习课程  bi 。
 
+例如，先修课程对 [0, 1] 表示：想要学习课程 0 ，你需要先完成课程 1 。
+请你判断是否可能完成所有课程的学习？如果可以，返回 true ；否则，返回 false 。
+
+思路：以prerequisites 构造有向图，然后寻找有向图中的拓扑排序(即寻找没有环的解)
+
+```java
+class Solution {
+    private List<List<Integer>> edges;
+    boolean valid = true;
+    //访问记录数据 未访问0 访问中1 访问结束2
+    int[] visited;
+    public boolean canFinish(int numCourses, int[][] prerequisites) {
+        edges = new ArrayList<List<Integer>>();
+        visited = new int[numCourses];
+        for (int i = 0; i < numCourses; i ++) {
+            edges.add(i, new ArrayList<Integer>());
+        }
+        //构造边 注意指向
+        for (int i = 0; i < prerequisites.length; i ++) {
+            for (int j = 0; j < prerequisites[i].length; j ++) {
+                edges.get(prerequisites[i][1]).add(prerequisites[i][0]);
+            }
+        }
+        //时刻注意剪枝 如果已经invalid就不要再进行dfs了
+        for (int i = 0; i < numCourses; i ++) {
+            if (visited[i] == 0 && valid) {
+                dfs(i);
+            }
+        }
+        return valid;
+    }
+
+    private void dfs(int i) {
+        //访问开始
+        visited[i] = 1;
+        for (int j = 0; j < edges.get(i).size(); j ++) {
+            if (visited[edges.get(i).get(j)] == 1) {
+                valid = false;
+                return;
+            } else if (visited[edges.get(i).get(j)] == 0 && valid) {
+                dfs(edges.get(i).get(j));
+            }
+        }
+        //访问结束
+        visited[i] = 2;
+    }
+}
+```
 
