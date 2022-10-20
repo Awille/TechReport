@@ -146,3 +146,9 @@ surface销毁时机：
 * 通过lockCanvas对surface进行操作时，渲染操作在CPU中进行，并直接写到缓冲区中，等待Vsync-sf信号到来，surfaceFlinger进行消费。
 * 通过lockHardwareCanvas进行操作是，真正的渲染操作会嫁接RenderThread中使用GPU进行，渲染结束后提交到缓冲区，等待Vsync-sf信号到来，surfaceFlinger进行消费。
 * 触发渲染的操作不用等待Vsync-app信号触发。(这一点后续增加trace再验证下，目前简单来看，应该是该结论)
+
+
+
+## 4、SurfaceView 请求窗口过程
+
+当SurfaceView可见时(已经被添加到布局中)，SurfaceView向父窗口请求设置一块透明区域，这个透明区域是为了使SurfaceView在宿主窗口可见，因为SurfaceView被添加时他的Z序是小于宿主窗口的，即他是显示在宿主窗口下面的，要显示SurfaceView就需要在宿主窗口设置对应大小的透明区域。
