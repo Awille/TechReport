@@ -532,5 +532,43 @@ relayoutWindow：
 
 ## 3、Surface与SurfaceControl的创建。
 
+### 3.1、Surface & SurfaceControl是什么
 
+```java
+/**
+ * Handle onto a raw buffer that is being managed by the screen compositor.
+ *
+ * <p>A Surface is generally created by or from a consumer of image buffers (such as a
+ * {@link android.graphics.SurfaceTexture}, {@link android.media.MediaRecorder}, or
+ * {@link android.renderscript.Allocation}), and is handed to some kind of producer (such as
+ * {@link android.opengl.EGL14#eglCreateWindowSurface(android.opengl.EGLDisplay,android.opengl.EGLConfig,java.lang.Object,int[],int) OpenGL},
+ * {@link android.media.MediaPlayer#setSurface MediaPlayer}, or
+ * {@link android.hardware.camera2.CameraDevice#createCaptureSession CameraDevice}) to draw
+ * into.</p>
+ *
+ * <p><strong>Note:</strong> A Surface acts like a
+ * {@link java.lang.ref.WeakReference weak reference} to the consumer it is associated with. By
+ * itself it will not keep its parent consumer from being reclaimed.</p>
+ */
+//Surface用于操纵被屏幕合成器(一般是SurfaceFlinger) 元缓冲数据
+public class Surface implements Parcelable {
+    
+}
+/**
+ * Handle to an on-screen Surface managed by the system compositor. The SurfaceControl is
+ * a combination of a buffer source, and metadata about how to display the buffers.
+ * By constructing a {@link Surface} from this SurfaceControl you can submit buffers to be
+ * composited. Using {@link SurfaceControl.Transaction} you can manipulate various
+ * properties of how the buffer will be displayed on-screen. SurfaceControl's are
+ * arranged into a scene-graph like hierarchy, and as such any SurfaceControl may have
+ * a parent. Geometric properties like transform, crop, and Z-ordering will be inherited
+ * from the parent, as if the child were content in the parents buffer stream.
+ */
+//处理被系统合成器管理的surface， SurfaceControl是缓冲数据源、和如何显示缓冲数据的的元数据组成。 通过构造SurfaceControl, 你可以提交被合成的buffer。 使用Transaction事务你可以操纵有关buffer如何显示的各种属性。SurfaceControl 在图形场景中被以层级的关系组织，所以SurfaceControl是可能存在父类的，并且继承父类想Z-order、transform、crop等属性，就像子类是父类缓冲数据流中的内容。
+public final class SurfaceControl implements Parcelable {
+    
+}
 
+```
+
+翻译的可能不是很恰当，理解大概的要点就行。
