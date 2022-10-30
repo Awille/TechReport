@@ -2,18 +2,25 @@
 
 ## 1、概述
 
-## 1.1、核心理解点：
+### 1.1、核心理解点：
 
 * 应用程序与Surface的关系
 * Surface与SurfaceFlinger的关系
 
-## 1.2、源码依据
+### 1.2、源码依据
 
 android10
 
+两个Android源码地址：
+**[platform_frameworks_native](https://github.com/Awille/platform_frameworks_native)**
+
+**[platform_frameworks_base](https://github.com/aosp-mirror/platform_frameworks_base)**
+
+大家自行下载两个库的Android源码，并切换到android10分支，跟着下面的流程一起看。
+
 ## 2、Activity的显示
 
-## 2.1 Activity对象的创建
+### 2.1 Activity对象的创建
 
 ActivityThread.handleResumeActivity：
 
@@ -165,7 +172,365 @@ final void attach(Context context, ActivityThread aThread,
 }
 ```
 
-到这里我们知道了window对象实例化的过程，下面看看windowManger
+到这里我们知道了window对象实例化的过程。 这里设置给window设置windowManger的过程也关注下：
+mWindow.setWindowManager:
 
-### 2.3、WindowManager
+```java
+public void setWindowManager(WindowManager wm, IBinder appToken, String appName,
+                             boolean hardwareAccelerated) {
+    mAppToken = appToken;
+    mAppName = appName;
+    mHardwareAccelerated = hardwareAccelerated;
+    if (wm == null) {
+        wm = (WindowManager)mContext.getSystemService(Context.WINDOW_SERVICE);
+    }
+    mWindowManager = ((WindowManagerImpl)wm).createLocalWindowManager(this);
+}
+
+//WindowManagerImple.createLocalWindowManager
+public WindowManagerImpl createLocalWindowManager(Window parentWindow) {
+    return new WindowManagerImpl(mContext, parentWindow);
+}
+
+//WindowManagerImpl 构造类
+private WindowManagerImpl(Context context, Window parentWindow) {
+    mContext = context;
+    mParentWindow = parentWindow;
+}
+
+```
+
+这里我们可以看到mWindow中的windowManger实际为WindowManagerImpl对象。 这里需要先记一下，便于后面流程的解析。
+
+### 2.4、HandleResumeActivity-将decorView添加到windowManger当中
+
+从上面的解析中我们知道了Window的具体实现类，我们重回handleResumeActivity看一看：
+
+```java
+@Override
+public void handleResumeActivity(IBinder token, boolean finalStateRequest, boolean isForward,
+                                 String reason) {
+    ...
+    final Activity a = r.activity;
+    if (r.window == null && !a.mFinished && willBeVisible) {
+        //获取window，上面分析过，为phoneWindow对象
+        r.window = r.activity.getWindow();
+        View decor = r.window.getDecorView();
+        decor.setVisibility(View.INVISIBLE);
+        //获取viewManager，viewManger的接口在windowManger当中实现了
+        ViewManager wm = a.getWindowManager();
+        WindowManager.LayoutParams l = r.window.getAttributes();
+        a.mDecor = decor;
+        l.type = WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
+        l.softInputMode |= forwardBit;
+        ...
+        if (a.mVisibleFromClient) {
+            if (!a.mWindowAdded) {
+                a.mWindowAdded = true;
+                //将decor添加到windowManager当中。
+                wm.addView(decor, l);
+            } else {
+                ...
+            }
+        }
+    } else if (!willBeVisible) {
+        ...
+    }
+    ...
+    Looper.myQueue().addIdleHandler(new Idler());
+}
+
+```
+
+这里的的关键为wm.addView(decor, l); wm对象为activity当中的windowManger成员变量，该成员变量的具体类为WindowManagerImpl，这个在上一节分析过，我们继续追踪wm.addView(decor, l)，实际为WindowMangerImpl.addView
+
+```java
+//WindowMangerImpl.addView
+@Override
+public void addView(@NonNull View view, @NonNull ViewGroup.LayoutParams params) {
+    applyDefaultToken(params);
+    mGlobal.addView(view, params, mContext.getDisplay(), mParentWindow);
+}
+
+//这里的mGlobal为WindowManagerGlobal对象，我们继续看WindowManagerGlobal.addView:
+public void addView(View view, ViewGroup.LayoutParams params,
+                    Display display, Window parentWindow) {
+    ...
+    ViewRootImpl root;
+    View panelParentView = null;
+    synchronized (mLock) {
+        ...
+            //1、创建ViewRootImpl对象
+            root = new ViewRootImpl(view.getContext(), display);
+        try {
+            //2、调用setView 将view添加到ViewRootImpl当中
+            root.setView(view, wparams, panelParentView);
+        } catch (RuntimeException e) {
+            ...
+        }
+    }
+}
+```
+
+以上过程我们主要关注两个，一个是创建ViewRootImpl， 一个是ViewRootImpl.setView， 下一节我们先分析new ViewRootImpl(view.getContext(), display)， 里面大有乾坤。
+
+
+
+### 2.5、newViewRootImpl
+
+构造函数
+
+```java
+@UnsupportedAppUsage
+final IWindowSession mWindowSession;
+final W mWindow;
+public ViewRootImpl(Context context, Display display) {
+    ...
+    //mWindowSession创建
+    mWindowSession = WindowManagerGlobal.getWindowSession();
+    ...
+    //mWindow对象创建
+    mWindow = new W(this);
+    ...
+}
+```
+
+创建ViewRootImpl的构造函数设计很多成员变量的初始化，我们先只关注mWindowSession， 跟mWindow对象的创建，这两个对象创建与WMS有关。
+
+* IWindowSession的创建
+
+  ```java
+  //WindowManagerGlobal.getWindowSession();
+  @UnsupportedAppUsage
+  public static IWindowSession getWindowSession() {
+      synchronized (WindowManagerGlobal.class) {
+          if (sWindowSession == null) {
+              try {
+                  ...
+                  //IWindowManager为WMS的AIDL服务
+                  IWindowManager windowManager = getWindowManagerService();
+                  //调用WMS.opneSession获取一个IWindowSession
+                  sWindowSession = windowManager.openSession(
+                      new IWindowSessionCallback.Stub() {
+                          @Override
+                          public void onAnimatorScaleChanged(float scale) {
+                              ValueAnimator.setDurationScale(scale);
+                          }
+                      });
+              } catch (RemoteException e) {
+                  throw e.rethrowFromSystemServer();
+              }
+          }
+          return sWindowSession;
+      }
+  }
+  
+  //getWindowManagerService实现
+  @UnsupportedAppUsage
+  public static IWindowManager getWindowManagerService() {
+      synchronized (WindowManagerGlobal.class) {
+          if (sWindowManagerService == null) {
+              sWindowManagerService = IWindowManager.Stub.asInterface(
+                  ServiceManager.getService("window"));
+              ...
+          }
+          return sWindowManagerService;
+      }
+  }
+  ```
+  我们看看WMS提供的openSession方法	
+  ```java
+  @Override
+  public IWindowSession openSession(IWindowSessionCallback callback) {
+    return new Session(this, callback);
+  }
+  
+  //那么Session到底是什么，我们看看官方释义：
+  /**
+   * This class represents an active client session.  There is generally one
+   * Session object per process that is interacting with the window manager.
+   
+  该类代表了一个活跃的客户端会话，通常每个应用继承会持有一个Session来用于与WMS交互。
+   */
+  class Session extends IWindowSession.Stub implements IBinder.DeathRecipient {
+      
+  }
+  ```
+
+  ok，通过上面的官方注释，我们已经很清晰知道Session的作用了，可以简单理解为应用程序进   程与WMS交互的工具。
+
+  所以在创建ViewRootImpl时，会在WMS中申请一个Session，该Session可被             ViewRootImpl用于与WMS进行交互。
+  
+
+* mWindow对象的创建
+
+  mWindow对象实际为W类型：
+
+  W为ViewRootImpl的静态内部类：
+
+  ```java
+  static class W extends IWindow.Stub
+  ```
+
+  这里我先给到结论，W是ViewRootImpl创建时传递给WMS的AIDL服务，WMS持有该对象对Window的行为进行控制。具体什么时候传递给WMS我们后续再ViewRootImpl.setView中分析
+
+### 2.6、ViewRootImpl.setView
+
+```java
+/**
+     * We have one child
+     */
+public void setView(View view, WindowManager.LayoutParams attrs, View panelParentView) {
+    synchronized (this) {
+        if (mView == null) {
+            mView = view;
+            ...
+            //requestLayout
+            requestLayout();
+            ...
+            try {
+                ...
+                //mWindowSession.addToDisplay
+                res = mWindowSession.addToDisplay(mWindow, mSeq, mWindowAttributes,
+                                                  getHostVisibility(), mDisplay.getDisplayId(), mTmpFrame,
+                                                  mAttachInfo.mContentInsets, mAttachInfo.mStableInsets,
+                                                  mAttachInfo.mOutsets, mAttachInfo.mDisplayCutout, mInputChannel,
+                                                  mTempInsets);
+                setFrame(mTmpFrame);
+            } catch (RemoteException e) {
+                ...
+            } finally {
+                ...
+            }
+    }
+}
+
+```
+
+我们先关注mWindowSession.addToDisplay， 这里mWindowSession是ViewRootImpl在WMS中申请的Session, 可以调用WMS的服务，我们看看Session中addToDisplay的实现：
+
+```java
+//Session.addToDisplay
+@Override
+public int addToDisplay(IWindow window, int seq, WindowManager.LayoutParams attrs,
+                        int viewVisibility, int displayId, Rect outFrame, Rect outContentInsets,
+                        Rect outStableInsets, Rect outOutsets,
+                        DisplayCutout.ParcelableWrapper outDisplayCutout, InputChannel outInputChannel,
+                        InsetsState outInsetsState) {
+    return mService.addWindow(this, window, seq, attrs, viewVisibility, displayId, outFrame,
+                              outContentInsets, outStableInsets, outOutsets, outDisplayCutout, outInputChannel,
+                              outInsetsState);
+}
+```
+
+//mService为WindowManagerService, WindowMangerService.addWindow里面的方法太繁琐了，我们就不看了，但可以关注到在addToDisplay时ViewRootImpl的mWindow对象，W类型，被传入到WMS当中，后续WMS可以通过该AIDL服务区操作客户端的window。
+
+再看requstLayout，requestLayout会吧performTraversal任务发送给Choreographer，并请求在Vsync信号，在接收到Vsync信号时，performTraversal会被执行(这里面的过程这里就不分析了，外面很多文章有对应分析)。  我们关注下performTraversal里面的关键函数：
+
+```java
+@UnsupportedAppUsage
+public final Surface mSurface = new Surface();
+private final SurfaceControl mSurfaceControl = new SurfaceControl();
+
+private void performTraversals() {
+    // cache mView since it is used so much below...
+    final View host = mView;
+	...
+    //这里有一个知识点，后续面试可以追踪下，八股之一
+    // Execute enqueued actions on every traversal in case a detached view enqueued an action
+    getRunQueue().executeActions(mAttachInfo.mHandler);
+    if (mFirst || windowShouldResize || insetsChanged ||
+        viewVisibilityChanged || params != null || mForceNextWindowRelayout) {
+        ...
+        try {
+            ...
+            //relayoutWindow 关键函数
+            relayoutResult = relayoutWindow(params, viewVisibility, insetsPending);
+            ...
+        } catch (RemoteException e) {
+        }
+        //ThreadedRenderer构建
+        final ThreadedRenderer threadedRenderer = mAttachInfo.mThreadedRenderer;
+        ...
+    }
+    ...
+    mIsInTraversal = false;
+}
+```
+
+performTraversals中有绘制三联操作，老生常谈了，这里我们只关注与WMS的有关的逻辑，
+
+relayoutWindow：
+
+```java
+    private int relayoutWindow(WindowManager.LayoutParams params, int viewVisibility,
+            boolean insetsPending) throws RemoteException {
+        ...
+        //注意这里传入了mSurfaceControl对象，mSurfaceControl是初始化时创建的
+        int relayoutResult = mWindowSession.relayout(mWindow, mSeq, params,
+                (int) (mView.getMeasuredWidth() * appScale + 0.5f),
+                (int) (mView.getMeasuredHeight() * appScale + 0.5f), viewVisibility,
+                insetsPending ? WindowManagerGlobal.RELAYOUT_INSETS_PENDING : 0, frameNumber,
+                mTmpFrame, mPendingOverscanInsets, mPendingContentInsets, mPendingVisibleInsets,
+                mPendingStableInsets, mPendingOutsets, mPendingBackDropFrame, mPendingDisplayCutout,
+                mPendingMergedConfiguration, mSurfaceControl, mTempInsets);
+        if (mSurfaceControl.isValid()) {
+            //复制Surface
+            mSurface.copyFrom(mSurfaceControl);
+        } else {
+            destroySurface();
+        }
+        ...
+        return relayoutResult;
+    }
+```
+
+这里调用了mWindowSession.relayout
+
+```java
+    @Override
+    public int relayout(IWindow window, int seq, WindowManager.LayoutParams attrs,
+            int requestedWidth, int requestedHeight, int viewFlags, int flags, long frameNumber,
+            Rect outFrame, Rect outOverscanInsets, Rect outContentInsets, Rect outVisibleInsets,
+            Rect outStableInsets, Rect outsets, Rect outBackdropFrame,
+            DisplayCutout.ParcelableWrapper cutout, MergedConfiguration mergedConfiguration,
+            SurfaceControl outSurfaceControl, InsetsState outInsetsState) {
+        if (false) Slog.d(TAG_WM, ">>>>>> ENTERED relayout from "
+                + Binder.getCallingPid());
+        Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, mRelayoutTag);
+        //传入outSurfaceControl对象
+        int res = mService.relayoutWindow(this, window, seq, attrs,
+                requestedWidth, requestedHeight, viewFlags, flags, frameNumber,
+                outFrame, outOverscanInsets, outContentInsets, outVisibleInsets,
+                outStableInsets, outsets, outBackdropFrame, cutout,
+                mergedConfiguration, outSurfaceControl, outInsetsState);
+        Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
+        if (false) Slog.d(TAG_WM, "<<<<<< EXITING relayout to "
+                + Binder.getCallingPid());
+        return res;
+    }
+```
+
+好了，前面铺垫这么久，终于到了与Surface相关的逻辑了，我们可以看到mSurface与mSurfaceControl都是在创建ViewRootImpl时创建的对象，但是最终传给了WMS, 后续使用WMS返回的mSurfaceControl复制到当前的Surface当中。所以实际上看来，window创建的Surface真正的操作是在WMS当中。
+
+
+
+### 2.7、阶段总结
+
+经历了上面一长串逻辑，我们先理清一下我们得到的结论。
+
+* 在ActivityThread.handleResumeActivity当中，会将decorView加入到windowManager当中
+* 该windowManager的实现为WindowMangerImpl，WindoMangerImpl.addView由WindowMangerGlobal代理实现
+* WindowManagerGlobal.addView方法中会创建ViewRootImpl
+* ViewRootImpl创建时会新建surface, 与surfaceControl，但实质为空实现。 并且会通过AIDL调用WMS请求一个Session, 持有该Session可以调用WMS的一些服务。
+* ViewRootImpl.setView方法中会调用addToDisplay，将自身暴露给WMS的AIDL服务(W类型)传递给WMS。
+* ViewRootImpl.setView方法中会调用requestLayout，最终执行的performTravelsal当中会调用mSession.relayoutWindow, 调用时会传入surfaceControl，最终服务结束时，将返回的surfaceControl复制到Surface当中。
+
+
+
+接下来，我们就针对Surface怎么创建的主题进行进一步的分析。
+
+## 3、Surface与SurfaceControl的创建。
+
+
 
