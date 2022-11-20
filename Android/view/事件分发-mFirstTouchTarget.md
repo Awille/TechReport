@@ -578,3 +578,6 @@ if (mFirstTouchTarget == null) {
 1. `ACTION_UP`：说明这是最后一个触控点抬起，通过`resetTouchState()`完全清理派分目标和状态。
 2. `ACTION_POINTER_UP`：移除触控点对应的`TouchTarget`内的`pointerIdBits`记录，当移除后`pointerIdBits = 0`（即没有其他触控点记录），则把该`TouchTarget`从`mFirstTouchTarget`中移除。
 
+
+
+好了总结了这么久 大家可以重新再过一遍事件分发流程，希望大家有新的理解。
