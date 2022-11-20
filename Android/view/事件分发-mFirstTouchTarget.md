@@ -581,3 +581,8 @@ if (mFirstTouchTarget == null) {
 
 
 好了总结了这么久 大家可以重新再过一遍事件分发流程，希望大家有新的理解。
+
+* 只有ACTION_DOWN或者ACTION_POINTER_DOWN会产生新的touchTarget
+* 如果ACTION_DOWN没有找到touchTarget， 那么后续的MOVE或者ACTION_POINTER_DOWN都不会进行事件传递了，ViewGroup会降级成View，直接消耗后续的事件。
+* 继ACTION_DOWN之后，如果ACTION_POINTER_DOWN产生了新的touchTarget与ACTION_DOWN目标不同，新的touchTarget会加到链表当中。如果跟ACTION_DOWN是同一个目标，则把事件的pointerId记录下mask里面去。
+
