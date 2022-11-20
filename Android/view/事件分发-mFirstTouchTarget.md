@@ -398,14 +398,110 @@ private TouchTarget addTouchTarget(@NonNull View child, int pointerIdBits) {
 }
 ```
 
+理一下dispatchTransformedTouchEvent的逻辑
+
+```java
+/**
+     * Transforms a motion event into the coordinate space of a particular child view,
+     * filters out irrelevant pointer ids, and overrides its action if necessary.
+     * If child is null, assumes the MotionEvent will be sent to this ViewGroup instead.
+     */
+private boolean dispatchTransformedTouchEvent(MotionEvent event, boolean cancel,
+                                              View child, int desiredPointerIdBits) {
+    final boolean handled;
+
+    // Canceling motions is a special case.  We don't need to perform any transformations
+    // or filtering.  The important part is the action, not the contents.
+    final int oldAction = event.getAction();
+    if (cancel || oldAction == MotionEvent.ACTION_CANCEL) {
+        //如果是CANCEL的场景
+        event.setAction(MotionEvent.ACTION_CANCEL);
+        if (child == null) {
+            //child传入null  父类未view，那么该viewGroup将退化成view，走view 的事件分发，会执行onTouchEvent等逻辑
+            handled = super.dispatchTouchEvent(event);
+        } else {
+            //调用子类的dispatchTouchEvent
+            handled = child.dispatchTouchEvent(event);
+        }
+        event.setAction(oldAction);
+        return handled;
+    }
+
+    //------------------------------------------------
+    // Calculate the number of pointers to deliver.
+    final int oldPointerIdBits = event.getPointerIdBits();
+    final int newPointerIdBits = oldPointerIdBits & desiredPointerIdBits;
+
+    // If for some reason we ended up in an inconsistent state where it looks like we
+    // might produce a motion event with no pointers in it, then drop the event.
+    if (newPointerIdBits == 0) {
+        return false;
+    }
+    //以上一段是一致性校验，确保当前触控的poniterId跟调用该函数前 是保持一致的。 说实话，我也不知道出现不一致的场景有哪些我们就不关心了。
+    //...............................................
+
+    // If the number of pointers is the same and we don't need to perform any fancy
+    // irreversible transformations, then we can reuse the motion event for this
+    // dispatch as long as we are careful to revert any changes we make.
+    // Otherwise we need to make a copy.
+    final MotionEvent transformedEvent;
+    if (newPointerIdBits == oldPointerIdBits) {
+        //我们只关注该场景：
+        if (child == null || child.hasIdentityMatrix()) {
+            if (child == null) {
+                //ViewGroup退化为view直接处理
+                handled = super.dispatchTouchEvent(event);
+            } else {
+                final float offsetX = mScrollX - child.mLeft;
+                final float offsetY = mScrollY - child.mTop;
+                event.offsetLocation(offsetX, offsetY);
+                //调用子view的dispatchTouchEvent
+                handled = child.dispatchTouchEvent(event);
+
+                event.offsetLocation(-offsetX, -offsetY);
+            }
+            //返回消费结果
+            return handled;
+        }
+        transformedEvent = MotionEvent.obtain(event);
+    } else {
+        transformedEvent = event.split(newPointerIdBits);
+    }
+
+    // Perform any necessary transformations and dispatch.
+    if (child == null) {
+        //ViewGroup退化为view直接处理
+        handled = super.dispatchTouchEvent(transformedEvent);
+    } else {
+        final float offsetX = mScrollX - child.mLeft;
+        final float offsetY = mScrollY - child.mTop;
+        transformedEvent.offsetLocation(offsetX, offsetY);
+        if (! child.hasIdentityMatrix()) {
+            transformedEvent.transform(child.getInverseMatrix());
+        }
+        //调用子view的dispatchTouchEvent
+        handled = child.dispatchTouchEvent(transformedEvent);
+    }
+
+    // Done.
+    transformedEvent.recycle();
+    return handled;
+}
+```
+
+总结下来就是，如果传入子view为null，则ViewGroup退化为view调用dispatchTouchEvent，否则调用子view的diapatchTouchEvent。
+
 看到创建touchTarget的过程后我们继续往下看：
 
 ```java
+//case1 ----------------------------------------------------------------
 if (newTouchTarget == null && mFirstTouchTarget != null) {
-    //遍历子view没找到接收该点控的view 但是 之前mFirstTouchTarget不为空(这个case只发生在非初始ACTION_DOWN事件中，mFirstTouchTarget在第一次的ACTION_DOWN事件中构建好了)
+    //该case发生下 发生了ACTION_POINTER_DOWN事件，即多点触控场景
+    //遍历子view没找到接收该点控的view 但是 之前mFirstTouchTarget不为空(这个case只发生在非初始ACTION_DOWN事件中，mFirstTouchTarget在第一次的ACTION_DOWN事件中构建好了， 所以一般情况为无法找到消耗ACTION_POINTER_DOWN事件时产生。)
     // Did not find a child to receive the event.
     // Assign the pointer to the least recently added target.
-    //将此点控的pointerId记录到最先链表的尾部(即第一次创建的touchTarget)
+    //将此点控(一般为ACTION_POINTER_DOWN)的pointerId记录到最先链表的尾部(即第一次创建的touchTarget，一般为消耗ACRION_DOWN的控件)
+    //这里可以引入一个问题 按下A，按下VG（空白区域），为什么先释放A，却无法触发A的点击事件，继续释放VG，又会触发A的点击事件。ACTION_DOWN被A消耗，则mFirstTouchTarget的末尾元素为A，后续没有被消耗的ACTION_POINTER_DOWN事件都会传入A中，此时相当于A是2个触控点的目标元素。
     newTouchTarget = mFirstTouchTarget;
     while (newTouchTarget.next != null) {
         newTouchTarget = newTouchTarget.next;
@@ -413,20 +509,25 @@ if (newTouchTarget == null && mFirstTouchTarget != null) {
     newTouchTarget.pointerIdBits |= idBitsToAssign;
 }
 
+//case2 ---------------------------------------------------------------------------
 // Dispatch to touch targets.
 if (mFirstTouchTarget == null) {
+    //进入该case时，代表该事件未找到排粉目标
     // No touch targets so treat this as an ordinary view.
-    //mFirstTouchTarget为空， dispatchTransformedTouchEvent中view传入null代表自己
+    //mFirstTouchTarget为空， dispatchTransformedTouchEvent中view传入null代表自己。ViewGroup退化成View处理该点击事件。
     handled = dispatchTransformedTouchEvent(ev, canceled, null,
                                             TouchTarget.ALL_POINTER_IDS);
 } else {
+    //case3 -------------------------------------------------------------
     // Dispatch to touch targets, excluding the new touch target if we already
     // dispatched to it.  Cancel touch targets if necessary.
+    //发生在非ACTION_DOWN事件
     TouchTarget predecessor = null;
     TouchTarget target = mFirstTouchTarget;
     while (target != null) {
         final TouchTarget next = target.next;
         if (alreadyDispatchedToNewTouchTarget && target == newTouchTarget) {
+            //用到了alreadyDispatchedToNewTouchTarget标记，用于过滤新建TouchTarget时已消耗事件的情况，避免重复派分。
             handled = true;
         } else {
             final boolean cancelChild = resetCancelNextUpFlag(target.child)
@@ -452,4 +553,28 @@ if (mFirstTouchTarget == null) {
 }
 ```
 
-TODO dispatchTransformedTouchEvent  以及 以上 两种情况的处理
+可以做个小结：
+
+以上部分可能导致的结果有：
+
+| /                                    | mFirstTouchTarget | newTouchTarget       | alreadyDispatchedToNewTouchTarget |
+| ------------------------------------ | ----------------- | -------------------- | --------------------------------- |
+| `ACTION_DOWN` 无目标                 | `null`            | `null`               | `false`                           |
+| `ACTION_DOWN` 有目标                 | `TouchTarget(0)`  | `new TouchTarget(0)` | `true`                            |
+| `ACTION_POINTER_DOWN` 无目标         | `TouchTarget(0)`  | `TouchTarget(0)`     | `false`                           |
+| `ACTION_POINTER_DOWN` 有目标(已存在) | 不变              | `find TouchTarget`   | `false`                           |
+| `ACTION_POINTER_DOWN` 有目标(不存在) | `TouchTarget(n)`  | `new TouchTarget(n)` | `true`                            |
+
+可以总结到如下性质：
+
+1. 标记位`alreadyDispatchedToNewTouchTarget`只会在新建`TouchTarget`时设置`true`。
+2. `ACTION_DOWN`无法找到目标时会导致后续所有的派分都直接传到`ViewGroup`本身。
+3. `ACTION_POINTER_DOWN`无法找到目标时视为`ACTION_DOWN`目标接收派分。
+
+对于ACTION_UP事件：
+
+剩余的部分，是对`ACTION_UP`类型事件进行清理：
+
+1. `ACTION_UP`：说明这是最后一个触控点抬起，通过`resetTouchState()`完全清理派分目标和状态。
+2. `ACTION_POINTER_UP`：移除触控点对应的`TouchTarget`内的`pointerIdBits`记录，当移除后`pointerIdBits = 0`（即没有其他触控点记录），则把该`TouchTarget`从`mFirstTouchTarget`中移除。
+
