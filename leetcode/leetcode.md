@@ -161,3 +161,82 @@ class Solution {
 }
 ```
 
+
+
+## 滑动窗口
+
+### [53、最大子数组和](https://leetcode.cn/problems/maximum-subarray/)
+
+最简单直接的解法：
+
+两重for循环，复杂度为O(n^2)
+
+更优化的解法：动态规划
+
+比如数组[1,2, -1, -3]
+
+* 子问题1：以1结尾的最大子数组是多少？
+* 子问题2：以2结尾的最大子数组是多少？
+* 子问题3：以-1结尾的最大子数组是多少？
+* 子问题4：以-3结尾的最大子数组是多少？
+
+这些子问题都联系的，比如 子问题2可以转化为子问题1的值加上2孰大孰小
+
+我们建立数组dp[i], 代表以数组i位置结尾的最大子数组值，那么可以得到
+
+dp[i+1] = dp[i] + value[i + 1] >= values[i+1] ? dp[i] + valuse[i+1] : valuse[i+1]
+
+由此，我们可以从子问题1推到子问题2，再从子问题推到到子问题3
+
+```java
+class Solution {
+    public int maxSubArray(int[] nums) {
+        int length = nums.length;
+        int[] dp = new int[length];
+        dp[0] = nums[0];
+        int max = dp[0];
+        for (int i = 1; i < length; i ++) {
+            int sum = dp[i-1] + nums[i];
+            if (sum >= nums[i]) {
+                dp[i] = sum;
+            } else {
+                dp[i] = nums[i];
+            }
+            max = Math.max(max, dp[i]);
+        }
+        return max;
+    }
+}
+```
+
+
+
+### [121.买卖股票的最佳时机](https://leetcode.cn/problems/best-time-to-buy-and-sell-stock/)
+
+假设在第i天卖出，则在i天前的历史最低价买入最合适
+
+```java
+class Solution {
+    public int maxProfit(int[] prices) {
+        if (prices.length == 0 || prices.length == 1) {
+            return 0;
+        }
+        int minPrice = prices[0];
+        int maxProfit = 0;
+        for (int i = 1; i < prices.length; i ++) {
+            maxProfit = Math.max(maxProfit, prices[i] - minPrice);
+            minPrice = Math.min(minPrice, prices[i]);
+        }
+        return maxProfit;
+    }
+}
+```
+
+
+
+
+
+
+
+
+
