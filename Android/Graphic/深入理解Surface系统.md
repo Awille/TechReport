@@ -361,7 +361,6 @@ public ViewRootImpl(Context context, Display display) {
 
   所以在创建ViewRootImpl时，会在WMS中申请一个Session，该Session可被             ViewRootImpl用于与WMS进行交互。
   
-
 * mWindow对象的创建
 
   mWindow对象实际为W类型：
