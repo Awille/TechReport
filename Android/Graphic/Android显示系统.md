@@ -6,6 +6,8 @@
 
 参考文档：https://blog.changdong.ltd/2020/03/11/xue-xi-android-xian-shi-xi-tong/
 
+https://ljd1996.github.io/2020/09/15/Android%E5%9B%BE%E5%BD%A2%E7%B3%BB%E7%BB%9F%E7%BB%BC%E8%BF%B0/
+
 
 
 ## 2 从下层往上层理解

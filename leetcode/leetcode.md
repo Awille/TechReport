@@ -234,9 +234,99 @@ class Solution {
 
 
 
+### [3.无重复字符的最长子串](https://leetcode.cn/problems/longest-substring-without-repeating-characters/)
+
+滑动窗口，从0开始进行窗口扩展，当向右延伸的元素包含窗口中的值时，将窗口左侧移动至不包含该元素之处，并在窗口滑动过程中不断记录最大的大小。
+
+```java
+class Solution {
+    public int lengthOfLongestSubstring(String s) {
+        Map<Character, Integer> map = new HashMap<>();
+        int maxLength = 0;
+        int left = 0, right = 0;
+        while(right < s.length()) {
+            Integer charIndex = map.get(s.charAt(right));
+            if (charIndex != null) {
+                //滑动窗口左侧移动，并删除被移动的元素
+                for(int i = left; i < charIndex + 1; i ++) {
+                    map.remove(s.charAt(i));
+                }
+                left = charIndex + 1;
+            }
+            map.put(s.charAt(right), right);
+            maxLength = Math.max(right - left + 1, maxLength);
+            right ++;
+        }
+        return maxLength;
+    }
+}
+
+
+//更优化的解法： 默认以i结尾的字串，每次更新left的值， map这里的作用只是标记坐标，不做最长字串的记录
+class Solution {
+    public int lengthOfLongestSubstring(String s) {
+        Map<Character, Integer> map = new HashMap<>();
+        int maxLength = 0;
+        int left = 0;
+        for (int i = 0; i < s.length(); i ++) {
+            //以i位置结尾的最长子串
+            Integer index = map.get(s.charAt(i));
+            if (index != null) {
+                left = Math.max(left, index + 1);
+            } 
+            map.put(s.charAt(i), i);
+            maxLength = Math.max(maxLength, i - left + 1);
+        }
+        return maxLength;
+    }
+}
+```
+
+
+
+### [209. 长度最小的子数组](https://leetcode.cn/problems/minimum-size-subarray-sum/)
+
+双指针加滑动窗口：
+
+```java
+class Solution {
+    public int minSubArrayLen(int target, int[] nums) {
+        if (nums.length == 1) {
+            if (nums[0] >= target) {
+                return 1;
+            } else {
+                return 0;
+            }
+        }
+        int sum = 0;
+        int minLength = nums.length;
+        int left = 0, right = 0;
+        while (right < nums.length) {
+            sum += nums[right];
+            while((sum - nums[left] >= target) && left < right) {
+                sum -= nums[left];
+                left ++;
+            }
+            if (sum >= target) {
+                minLength = Math.min(minLength, right - left + 1);
+            }
+            right ++;
+        }
+        if (sum >= target) {
+            return minLength;
+        }
+        return 0;
+    }
+}
+```
 
 
 
 
 
+### [239. 滑动窗口最大值](https://leetcode.cn/problems/sliding-window-maximum/)
+
+
+
+### [567. 字符串的排列](https://leetcode.cn/problems/permutation-in-string/)
 
