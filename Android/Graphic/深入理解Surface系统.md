@@ -1,4 +1,4 @@
-# 深入理解Surface系统
+# Android Surfacer创建流程
 
 ## 1、概述
 
@@ -571,3 +571,733 @@ public final class SurfaceControl implements Parcelable {
 ```
 
 翻译的可能不是很恰当，理解大概的要点就行。
+
+
+
+### 3.2、SurfaceControl创建 java流程
+
+回到之前的
+
+```java
+int res = mService.relayoutWindow(this, window, seq, attrs,
+                requestedWidth, requestedHeight, viewFlags, flags, frameNumber,
+                outFrame, outOverscanInsets, outContentInsets, outVisibleInsets,
+                outStableInsets, outsets, outBackdropFrame, cutout,
+                mergedConfiguration, outSurfaceControl, outInsetsState);
+```
+
+这里的mService对象为的实现类为WindowManagerService.java
+
+找到对应实现类的relayoutWindow方法，寻找对outSurfaceControl操作的逻辑
+我们找到这样的一个关键逻辑：
+
+```java
+try {
+    result = createSurfaceControl(outSurfaceControl, result, win, winAnimator);
+} catch (Exception e) {
+    displayContent.getInputMonitor().updateInputWindowsLw(true /*force*/);
+
+    Slog.w(TAG_WM, "Exception thrown when creating surface for client "
+             + client + " (" + win.mAttrs.getTitle() + ")",
+             e);
+    Binder.restoreCallingIdentity(origId);
+    return 0;
+}
+```
+
+查看createSurfaceControl实现：
+
+```java
+private int createSurfaceControl(SurfaceControl outSurfaceControl, int result, WindowState win,
+        WindowStateAnimator winAnimator) {
+    if (!win.mHasSurface) {
+        result |= RELAYOUT_RES_SURFACE_CHANGED;
+    }
+
+    WindowSurfaceController surfaceController;
+    try {
+        Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, "createSurfaceControl");
+        //创建surfaceController
+        surfaceController = winAnimator.createSurfaceLocked(win.mAttrs.type, win.mOwnerUid);
+    } finally {
+        Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
+    }
+    if (surfaceController != null) {
+        //将创建好的surfaceController给到outSurfaceControl
+        surfaceController.getSurfaceControl(outSurfaceControl);
+        if (SHOW_TRANSACTIONS) Slog.i(TAG_WM, "  OUT SURFACE " + outSurfaceControl + ": copied");
+    } else {
+        // For some reason there isn't a surface.  Clear the
+        // caller's object so they see the same state.
+        Slog.w(TAG_WM, "Failed to create surface control for " + win);
+        outSurfaceControl.release();
+    }
+
+    return result;
+}
+```
+
+winAnimator为WindowStateAnimator类，  查看该类的实现
+
+WindowSurfaceController createSurfaceLocked(int windowType, int ownerUid) {
+
+```java
+WindowSurfaceController createSurfaceLocked(int windowType, int ownerUid) {
+final WindowState w = mWin;
+
+if (mSurfaceController != null) {
+    //如果已经创建直接返回
+    return mSurfaceController;
+}
+//未创建surface reset相关状态
+w.setHasSurface(false);
+resetDrawState();
+
+mService.makeWindowFreezingScreenIfNeededLocked(w);
+
+int flags = SurfaceControl.HIDDEN;
+final WindowManager.LayoutParams attrs = w.mAttrs;
+
+if (mService.isSecureLocked(w)) {
+    flags |= SurfaceControl.SECURE;
+}
+//计算surface区间
+calculateSurfaceBounds(w, attrs, mTmpSize);
+
+// Set up surface control with initial size.
+try {
+    final boolean isHwAccelerated = (attrs.flags & FLAG_HARDWARE_ACCELERATED) != 0;
+    final int format = isHwAccelerated ? PixelFormat.TRANSLUCENT : attrs.format;
+    if (!PixelFormat.formatHasAlpha(attrs.format)
+            // Don't make surface with surfaceInsets opaque as they display a
+            // translucent shadow.
+            && attrs.surfaceInsets.left == 0
+            && attrs.surfaceInsets.top == 0
+            && attrs.surfaceInsets.right == 0
+            && attrs.surfaceInsets.bottom == 0
+            // Don't make surface opaque when resizing to reduce the amount of
+            // artifacts shown in areas the app isn't drawing content to.
+            && !w.isDragResizing()) {
+        flags |= SurfaceControl.OPAQUE;
+    }
+    //创建surface关键逻辑
+    mSurfaceController = new WindowSurfaceController(mSession.mSurfaceSession,
+            attrs.getTitle().toString(), width, height, format, flags, this,
+            windowType, ownerUid);
+    mSurfaceController.setColorSpaceAgnostic((attrs.privateFlags
+            & WindowManager.LayoutParams.PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC) != 0);
+
+    setOffsetPositionForStackResize(false);
+    mSurfaceFormat = format;
+
+    w.setHasSurface(true);
+} catch (OutOfResourcesException e) {
+    Slog.w(TAG, "OutOfResourcesException creating surface");
+    mService.mRoot.reclaimSomeSurfaceMemory(this, "create", true);
+    mDrawState = NO_SURFACE;
+    return null;
+} catch (Exception e) {
+    Slog.e(TAG, "Exception creating surface (parent dead?)", e);
+    mDrawState = NO_SURFACE;
+    return null;
+}
+return mSurfaceController;
+}
+```
+
+  查看该方法逻辑：
+public WindowSurfaceController(SurfaceSession s, String name, int w, int h, int format,
+
+```java
+public WindowSurfaceController(SurfaceSession s, String name, int w, int h, int format,
+        int flags, WindowStateAnimator animator, int windowType, int ownerUid) {
+    mAnimator = animator;
+
+    mSurfaceW = w;
+    mSurfaceH = h;
+
+    title = name;
+
+    mService = animator.mService;
+    final WindowState win = animator.mWin;
+    mWindowType = windowType;
+    mWindowSession = win.mSession;
+
+    Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, "new SurfaceControl");
+    //可以看到WindowSurfaceController核心就是创建一个SurfaceControl对象， 
+    final SurfaceControl.Builder b = win.makeSurface()
+            .setParent(win.getSurfaceControl())
+            .setName(name)
+            .setBufferSize(w, h)
+            .setFormat(format)
+            .setFlags(flags)
+            .setMetadata(METADATA_WINDOW_TYPE, windowType)
+            .setMetadata(METADATA_OWNER_UID, ownerUid);
+    mSurfaceControl = b.build();
+    Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
+}
+```
+
+WindowSurfaceController会出一个SurfaceControl对象，并复制到他的mSurfaceControl成员变量中。
+
+  继续看看的创建：
+
+public SurfaceControl build() {
+
+```java
+@NonNull
+public SurfaceControl build() {
+    if (mWidth < 0 || mHeight < 0) {
+        throw new IllegalStateException(
+                "width and height must be positive or unset");
+    }
+    if ((mWidth > 0 || mHeight > 0) && (isColorLayerSet() || isContainerLayerSet())) {
+        throw new IllegalStateException(
+                "Only buffer layers can set a valid buffer size.");
+    }
+    //直接使用SurfaceControl的构造类使用
+    return new SurfaceControl(
+            mSession, mName, mWidth, mHeight, mFormat, mFlags, mParent, mMetadata);
+}
+```
+
+```java
+private SurfaceControl(SurfaceSession session, String name, int w, int h, int format, int flags,
+        SurfaceControl parent, SparseIntArray metadata)
+                throws OutOfResourcesException, IllegalArgumentException {
+
+    mName = name;
+    mWidth = w;
+    mHeight = h;
+    Parcel metaParcel = Parcel.obtain();
+    try {
+        if (metadata != null && metadata.size() > 0) {
+            metaParcel.writeInt(metadata.size());
+            for (int i = 0; i < metadata.size(); ++i) {
+                metaParcel.writeInt(metadata.keyAt(i));
+                metaParcel.writeByteArray(
+                        ByteBuffer.allocate(4).order(ByteOrder.nativeOrder())
+                                .putInt(metadata.valueAt(i)).array());
+            }
+            metaParcel.setDataPosition(0);
+        }
+        //nativeCreate方法构建对应的native对象，这里可以看到surface对象的实际创建都是在native进行创建的。
+        mNativeObject = nativeCreate(session, name, w, h, format, flags,
+                parent != null ? parent.mNativeObject : 0, metaParcel);
+    } finally {
+        metaParcel.recycle();
+    }
+    if (mNativeObject == 0) {
+        throw new OutOfResourcesException(
+                "Couldn't allocate SurfaceControl native object");
+    }
+
+    mCloseGuard.open("release");
+}
+```
+
+
+
+### 3.3、SurfaceControl创建native层流程
+
+通过上面java层的分析知道，surface的实际创建是在native层完成的
+
+  private static native long nativeCreate(SurfaceSession session, String name,...) 该方法的实现在E:\AOSP\frameworks\base\core\jni\android_view_SurfaceControl.cpp当中
+
+```c++
+static jlong nativeCreate(JNIEnv* env, jclass clazz, jobject sessionObj,
+        jstring nameStr, jint w, jint h, jint format, jint flags, jlong parentObject,
+        jobject metadataParcel) {
+    ScopedUtfChars name(env, nameStr);
+    sp<SurfaceComposerClient> client;
+    //创建SurfaceComposerClient对象，SurfaceComposerClient对象是创建surface的核心，其内部会通过binder调用surfaceFlinger的服务创建surface。
+    if (sessionObj != NULL) {
+        client = android_view_SurfaceSession_getClient(env, sessionObj);
+    } else {
+        client = SurfaceComposerClient::getDefault();
+    }
+    SurfaceControl *parent = reinterpret_cast<SurfaceControl*>(parentObject);
+    sp<SurfaceControl> surface;
+    LayerMetadata metadata;
+    Parcel* parcel = parcelForJavaObject(env, metadataParcel);
+    if (parcel && !parcel->objectsCount()) {
+        status_t err = metadata.readFromParcel(parcel);
+        if (err != NO_ERROR) {
+          jniThrowException(env, "java/lang/IllegalArgumentException",
+                            "Metadata parcel has wrong format");
+        }
+    }
+    //使用SurfaceComposerClient创建surface
+    status_t err = client->createSurfaceChecked(
+            String8(name.c_str()), w, h, format, &surface, flags, parent, std::move(metadata));
+    if (err == NAME_NOT_FOUND) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
+        return 0;
+    } else if (err != NO_ERROR) {
+        jniThrowException(env, OutOfResourcesException, NULL);
+        return 0;
+    }
+
+    surface->incStrong((void *)nativeCreate);
+    return reinterpret_cast<jlong>(surface.get());
+}
+```
+
+surface是由client->createSurfaceChecked创建的，这里的client对象为SurfaceComposerClient。
+
+我们切换到E:\AOSP\frameworks\native\libs\gui\SurfaceComposerClient.cpp中去查看createSurfaceChecked方法的实现
+
+```c++
+status_t SurfaceComposerClient::createSurfaceChecked(const String8& name, uint32_t w, uint32_t h,
+                                                     PixelFormat format,
+                                                     sp<SurfaceControl>* outSurface, uint32_t flags,
+                                                     SurfaceControl* parent,
+                                                     LayerMetadata metadata) {
+    sp<SurfaceControl> sur;
+    status_t err = mStatus;
+
+    if (mStatus == NO_ERROR) {
+        sp<IBinder> handle;
+        sp<IBinder> parentHandle;
+        sp<IGraphicBufferProducer> gbp;
+
+        if (parent != nullptr) {
+            parentHandle = parent->getHandle();
+        }
+        //SurfaceComposerClient中调用mClient->createSurface创建surface
+        err = mClient->createSurface(name, w, h, format, flags, parentHandle, std::move(metadata),
+                                     &handle, &gbp);
+        ALOGE_IF(err, "SurfaceComposerClient::createSurface error %s", strerror(-err));
+        if (err == NO_ERROR) {
+            *outSurface = new SurfaceControl(this, handle, gbp, true /* owned */);
+        }
+    }
+    return err;
+}
+```
+
+mClient->createSurface中， mClient对象为E:\AOSP\frameworks\native\services\surfaceflinger\Client.cpp对象，切换到对应的类当中查看其实现：
+
+```c++
+status_t Client::createSurface(const String8& name, uint32_t w, uint32_t h, PixelFormat format,
+                               uint32_t flags, const sp<IBinder>& parentHandle,
+                               LayerMetadata metadata, sp<IBinder>* handle,
+                               sp<IGraphicBufferProducer>* gbp) {
+    // We rely on createLayer to check permissions.
+    //使用mFlinger.createLayer方法创建surface， mFlinger为SurfaceFlinger的智能指针
+    return mFlinger->createLayer(name, this, w, h, format, flags, std::move(metadata), handle, gbp,
+                                 parentHandle);
+}
+```
+
+切换到E:\AOSP\frameworks\native\services\surfaceflinger\SurfaceFlinger.cpp当中
+
+```c++
+status_t SurfaceFlinger::createLayer(const String8& name, const sp<Client>& client, uint32_t w,
+                                     uint32_t h, PixelFormat format, uint32_t flags,
+                                     LayerMetadata metadata, sp<IBinder>* handle,
+                                     sp<IGraphicBufferProducer>* gbp,
+                                     const sp<IBinder>& parentHandle,
+                                     const sp<Layer>& parentLayer) {
+    //...省略非关键代码
+
+    sp<Layer> layer;
+
+    String8 uniqueName = getUniqueLayerName(name);
+
+    switch (flags & ISurfaceComposerClient::eFXSurfaceMask) {
+        case ISurfaceComposerClient::eFXSurfaceBufferQueue:
+            result = createBufferQueueLayer(client, uniqueName, w, h, flags, std::move(metadata),
+                                            format, handle, gbp, &layer);
+
+            break;
+        case ISurfaceComposerClient::eFXSurfaceBufferState:
+            result = createBufferStateLayer(client, uniqueName, w, h, flags, std::move(metadata),
+                                            handle, &layer);
+            break;
+        case ISurfaceComposerClient::eFXSurfaceColor:
+            // check if buffer size is set for color layer.
+            if (w > 0 || h > 0) {
+                ALOGE("createLayer() failed, w or h cannot be set for color layer (w=%d, h=%d)",
+                      int(w), int(h));
+                return BAD_VALUE;
+            }
+
+            result = createColorLayer(client, uniqueName, w, h, flags, std::move(metadata), handle,
+                                      &layer);
+            break;
+        case ISurfaceComposerClient::eFXSurfaceContainer:
+            // check if buffer size is set for container layer.
+            if (w > 0 || h > 0) {
+                ALOGE("createLayer() failed, w or h cannot be set for container layer (w=%d, h=%d)",
+                      int(w), int(h));
+                return BAD_VALUE;
+            }
+            result = createContainerLayer(client, uniqueName, w, h, flags, std::move(metadata),
+                                          handle, &layer);
+            break;
+        default:
+            result = BAD_VALUE;
+            break;
+    }
+
+    if (result != NO_ERROR) {
+        return result;
+    }
+
+    if (primaryDisplayOnly) {
+        layer->setPrimaryDisplayOnly();
+    }
+
+    bool addToCurrentState = callingThreadHasUnscopedSurfaceFlingerAccess();
+    result = addClientLayer(client, *handle, *gbp, layer, parentHandle, parentLayer,
+                            addToCurrentState);
+    if (result != NO_ERROR) {
+        return result;
+    }
+    mInterceptor->saveSurfaceCreation(layer);
+
+    setTransactionFlags(eTransactionNeeded);
+    return result;
+}
+```
+
+switch (flags & ISurfaceComposerClient::eFXSurfaceMask)里面会有四种case
+
+* ISurfaceComposerClient::eFXSurfaceBufferQueue
+  当 `flags` 中包含 `ISurfaceComposerClient::eFXSurfaceBufferQueue` 标志时，会创建一个 `BufferQueue` 对象。BufferQueue 是 SurfaceFlinger 用来进行缓冲区管理的类，它可以保证 SurfaceFlinger 能够正确地显示和更新屏幕内容。这种情况通常用于显示视频或动画等内容。
+
+* ISurfaceComposerClient::eFXSurfaceBufferState
+  当 `flags` 中包含 `ISurfaceComposerClient::eFXSurfaceBufferState` 标志时，会创建一个 Surface 作为存储缓冲区的目标，这种情况通常用于存储帧缓冲区，例如屏幕截图或录屏。
+
+* ISurfaceComposerClient::eFXSurfaceColor
+  当 `flags` 中包含 `ISurfaceComposerClient::eFXSurfaceColor` 标志时，会创建一个 Surface 作为纯色的显示目标。这种情况通常用于创建底色或者背景。
+
+* ISurfaceComposerClient::eFXSurfaceContainer
+  当 `flags` 中包含 `ISurfaceComposerClient::eFXSurfaceContainer` 标志时，会创建一个 Surface，作为一个容器来包含其他 Surface，这种情况通常用于创建一个 Surface 的集合。例如，Android 中的活动（Activity）就是一个 Surface，它可以包含其他 Surface，例如窗口和视图等。
+
+可以记住一个简单的场景，我们平时使用的activity是ISurfaceComposerClient::eFXSurfaceContainer类型，使用surfaceView的话对应ISurfaceComposerClient::eFXSurfaceBufferQueue类型。
+
+
+我们关注下第一种case:ISurfaceComposerClient::eFXSurfaceBufferQueue
+
+```c++
+status_t SurfaceFlinger::createBufferQueueLayer(const sp<Client>& client, const String8& name,
+                                                uint32_t w, uint32_t h, uint32_t flags,
+                                                LayerMetadata metadata, PixelFormat& format,
+                                                sp<IBinder>* handle,
+                                                sp<IGraphicBufferProducer>* gbp,
+                                                sp<Layer>* outLayer) {
+    // initialize the surfaces
+    switch (format) {
+    case PIXEL_FORMAT_TRANSPARENT:
+    case PIXEL_FORMAT_TRANSLUCENT:
+        format = PIXEL_FORMAT_RGBA_8888;
+        break;
+    case PIXEL_FORMAT_OPAQUE:
+        format = PIXEL_FORMAT_RGBX_8888;
+        break;
+    }
+
+    sp<BufferQueueLayer> layer = getFactory().createBufferQueueLayer(
+            LayerCreationArgs(this, client, name, w, h, flags, std::move(metadata)));
+    status_t err = layer->setDefaultBufferProperties(w, h, format);
+    if (err == NO_ERROR) {
+        *handle = layer->getHandle();
+        //graphicBufferProducer从创建的layer中获取
+        *gbp = layer->getProducer();
+        //将创建的layer传递给传入的layer参数指针。
+        *outLayer = layer;
+    }
+
+    ALOGE_IF(err, "createBufferQueueLayer() failed (%s)", strerror(-err));
+    return err;
+}
+```
+
+切换到：E:\AOSP\frameworks\native\services\surfaceflinger\SurfaceFlingerFactory.cpp 中查看
+
+```c++
+sp<BufferQueueLayer> createBufferQueueLayer(const LayerCreationArgs& args) override {
+    return new BufferQueueLayer(args);
+}
+```
+
+E:\AOSP\frameworks\native\services\surfaceflinger\BufferQueueLayer.cpp
+
+```c++
+BufferQueueLayer::BufferQueueLayer(const LayerCreationArgs& args) : BufferLayer(args) {}
+```
+
+里面的创建逻辑在父类BufferLayer当中：
+
+E:\AOSP\frameworks\native\services\surfaceflinger\BufferLayer.cpp
+
+```c++
+BufferLayer::BufferLayer(const LayerCreationArgs& args)
+      : Layer(args),
+        mTextureName(args.flinger->getNewTexture()),
+        mCompositionLayer{mFlinger->getCompositionEngine().createLayer(
+                compositionengine::LayerCreationArgs{this})} {
+    ALOGV("Creating Layer %s", args.name.string());
+
+    mPremultipliedAlpha = !(args.flags & ISurfaceComposerClient::eNonPremultiplied);
+
+    mPotentialCursor = args.flags & ISurfaceComposerClient::eCursorWindow;
+    mProtectedByApp = args.flags & ISurfaceComposerClient::eProtectedByApp;
+}
+
+```
+
+继续看起父类Layer的实现
+E:\AOSP\frameworks\native\services\surfaceflinger\Layer.cpp
+
+```c++
+Layer::Layer(const LayerCreationArgs& args)
+      : mFlinger(args.flinger),
+        mName(args.name),
+        mClientRef(args.client),
+        mWindowType(args.metadata.getInt32(METADATA_WINDOW_TYPE, 0)) {
+    mCurrentCrop.makeInvalid();
+
+    uint32_t layerFlags = 0;
+    if (args.flags & ISurfaceComposerClient::eHidden) layerFlags |= layer_state_t::eLayerHidden;
+    if (args.flags & ISurfaceComposerClient::eOpaque) layerFlags |= layer_state_t::eLayerOpaque;
+    if (args.flags & ISurfaceComposerClient::eSecure) layerFlags |= layer_state_t::eLayerSecure;
+
+    mTransactionName = String8("TX - ") + mName;
+    //各种状态赋值 
+    mCurrentState.active_legacy.w = args.w;
+    mCurrentState.active_legacy.h = args.h;
+    mCurrentState.flags = layerFlags;
+    mCurrentState.active_legacy.transform.set(0, 0);
+    mCurrentState.crop_legacy.makeInvalid();
+    mCurrentState.requestedCrop_legacy = mCurrentState.crop_legacy;
+    mCurrentState.z = 0;
+    mCurrentState.color.a = 1.0f;
+    mCurrentState.layerStack = 0;
+    mCurrentState.sequence = 0;
+    mCurrentState.requested_legacy = mCurrentState.active_legacy;
+    mCurrentState.active.w = UINT32_MAX;
+    mCurrentState.active.h = UINT32_MAX;
+    mCurrentState.active.transform.set(0, 0);
+    mCurrentState.transform = 0;
+    mCurrentState.transformToDisplayInverse = false;
+    mCurrentState.crop.makeInvalid();
+    mCurrentState.acquireFence = new Fence(-1);
+    mCurrentState.dataspace = ui::Dataspace::UNKNOWN;
+    mCurrentState.hdrMetadata.validTypes = 0;
+    mCurrentState.surfaceDamageRegion.clear();
+    mCurrentState.cornerRadius = 0.0f;
+    mCurrentState.api = -1;
+    mCurrentState.hasColorTransform = false;
+    mCurrentState.colorSpaceAgnostic = false;
+    mCurrentState.metadata = args.metadata;
+
+    // drawing state & current state are identical
+    mDrawingState = mCurrentState;
+
+    CompositorTiming compositorTiming;
+    args.flinger->getCompositorTiming(&compositorTiming);
+    mFrameEventHistory.initializeCompositorTiming(compositorTiming);
+    mFrameTracker.setDisplayRefreshPeriod(compositorTiming.interval);
+    //注册Layer
+    mSchedulerLayerHandle = mFlinger->mScheduler->registerLayer(mName.c_str(), mWindowType);
+    //回调LayerCreated
+    mFlinger->onLayerCreated();
+}
+```
+
+这里细看了下没看到surface创建的相关逻辑，我们回过头看E:\AOSP\frameworks\native\services\surfaceflinger\BufferLayer.cpp
+
+
+```c++
+BufferLayer::BufferLayer(const LayerCreationArgs& args)
+      : Layer(args),
+        mTextureName(args.flinger->getNewTexture()),
+       //这里调用mFlinger->getCompositionEngine().createLayer
+        mCompositionLayer{mFlinger->getCompositionEngine().createLayer(
+                compositionengine::LayerCreationArgs{this})} {
+    ALOGV("Creating Layer %s", args.name.string());
+
+    mPremultipliedAlpha = !(args.flags & ISurfaceComposerClient::eNonPremultiplied);
+
+    mPotentialCursor = args.flags & ISurfaceComposerClient::eCursorWindow;
+    mProtectedByApp = args.flags & ISurfaceComposerClient::eProtectedByApp;
+}
+
+```
+
+mFlinger->getCompositionEngine()方法
+
+E:\AOSP\frameworks\native\services\surfaceflinger\CompositionEngine\src\Output.cpp
+
+```c++
+const CompositionEngine& Output::getCompositionEngine() const {
+    return mCompositionEngine;
+}
+```
+
+E:\AOSP\frameworks\native\services\surfaceflinger\CompositionEngine\src\CompositionEngine.cpp
+
+```c++
+std::shared_ptr<compositionengine::Layer> CompositionEngine::createLayer(LayerCreationArgs&& args) {
+    return compositionengine::impl::createLayer(*this, std::move(args));
+}
+```
+
+E:\AOSP\frameworks\native\services\surfaceflinger\CompositionEngine\src\Layer.cpp
+
+```c++
+std::shared_ptr<compositionengine::Layer> createLayer(
+        const compositionengine::CompositionEngine& compositionEngine,
+        compositionengine::LayerCreationArgs&& args) {
+    return std::make_shared<Layer>(compositionEngine, std::move(args));
+}
+```
+
+该方法使用C++11的变长模板参数和完美转发来创建一个任意类型的Layer对象。这里我们传递的是`BufferQueueLayer`类型。`createLayer`方法会调用`std::make_shared`来创建一个`shared_ptr`类型的Layer对象。
+
+
+到这里看都没有看到具体的Surface实例的创建，我们忘记了一个很重要的一点
+`onFirstRef()`是在`sp<T>`或者`wp<T>`第一次被引用的时候被调用的。我们回看到BufferQueueLayer中，里面有对
+onFirstRef的实现：
+
+E:\AOSP\frameworks\native\services\surfaceflinger\BufferQueueLayer.cpp
+
+```c++
+void BufferQueueLayer::onFirstRef() {
+    BufferLayer::onFirstRef();
+
+    // Creates a custom BufferQueue for SurfaceFlingerConsumer to use
+    sp<IGraphicBufferProducer> producer;
+    sp<IGraphicBufferConsumer> consumer;
+    //创建bufferQueue,传入producer与consumer的引用
+    BufferQueue::createBufferQueue(&producer, &consumer, true);
+    mProducer = new MonitoredProducer(producer, mFlinger, this);
+    {
+        // Grab the SF state lock during this since it's the only safe way to access RenderEngine
+        Mutex::Autolock lock(mFlinger->mStateLock);
+        mConsumer =
+                new BufferLayerConsumer(consumer, mFlinger->getRenderEngine(), mTextureName, this);
+    }
+    mConsumer->setConsumerUsageBits(getEffectiveUsage(0));
+    mConsumer->setContentsChangedListener(this);
+    mConsumer->setName(mName);
+
+    // BufferQueueCore::mMaxDequeuedBufferCount is default to 1
+    if (!mFlinger->isLayerTripleBufferingDisabled()) {
+        mProducer->setMaxDequeuedBufferCount(2);
+    }
+
+    if (const auto display = mFlinger->getDefaultDisplayDevice()) {
+        updateTransformHint(display);
+    }
+}
+```
+
+E:\AOSP\frameworks\native\libs\gui\BufferQueue.cpp
+
+```c++
+void BufferQueue::createBufferQueue(sp<IGraphicBufferProducer>* outProducer,
+        sp<IGraphicBufferConsumer>* outConsumer,
+        bool consumerIsSurfaceFlinger) {
+    LOG_ALWAYS_FATAL_IF(outProducer == nullptr,
+            "BufferQueue: outProducer must not be NULL");
+    LOG_ALWAYS_FATAL_IF(outConsumer == nullptr,
+            "BufferQueue: outConsumer must not be NULL");
+    //创建BufferQueueCore 存储图形缓冲区的地方
+    sp<BufferQueueCore> core(new BufferQueueCore());
+    LOG_ALWAYS_FATAL_IF(core == nullptr,
+            "BufferQueue: failed to create BufferQueueCore");
+    //创建IGraphicBufferProducer 缓冲区数据生产者
+    sp<IGraphicBufferProducer> producer(new BufferQueueProducer(core, consumerIsSurfaceFlinger));
+    LOG_ALWAYS_FATAL_IF(producer == nullptr,
+            "BufferQueue: failed to create BufferQueueProducer");
+    //创建IGraphicBufferConsumer 缓冲区数据消费者
+    sp<IGraphicBufferConsumer> consumer(new BufferQueueConsumer(core));
+    LOG_ALWAYS_FATAL_IF(consumer == nullptr,
+            "BufferQueue: failed to create BufferQueueConsumer");
+    //赋值给传入的参数
+    *outProducer = producer;
+    *outConsumer = consumer;
+}
+```
+
+到这里可以看到BufferQueue中的BufferQueueCore，生产者，消费者全部被创建出来了，Layer已经全部创建成功，可以Surface的创建我们回到
+E:\AOSP\frameworks\native\libs\gui\SurfaceComposerClient.cpp
+
+```c++
+status_t SurfaceComposerClient::createSurfaceChecked(const String8& name, uint32_t w, uint32_t h,
+                                                     PixelFormat format,
+                                                     sp<SurfaceControl>* outSurface, uint32_t flags,
+                                                     SurfaceControl* parent,
+                                                     LayerMetadata metadata) {
+    sp<SurfaceControl> sur;
+    status_t err = mStatus;
+
+    if (mStatus == NO_ERROR) {
+        sp<IBinder> handle;
+        sp<IBinder> parentHandle;
+        sp<IGraphicBufferProducer> gbp;
+
+        if (parent != nullptr) {
+            parentHandle = parent->getHandle();
+        }
+
+        err = mClient->createSurface(name, w, h, format, flags, parentHandle, std::move(metadata),
+                                     &handle, &gbp);
+        ALOGE_IF(err, "SurfaceComposerClient::createSurface error %s", strerror(-err));
+        if (err == NO_ERROR) {
+            //创建surfaceControl, 传入BufferLayer中生成的graphicBufferProducer
+            *outSurface = new SurfaceControl(this, handle, gbp, true /* owned */);
+        }
+    }
+    return err;
+}
+```
+
+可以到这里可以看到SurfaceControl被创建生成出来了，具体的surface内呢？ 看到
+
+E:\AOSP\frameworks\native\libs\gui\SurfaceControl.cpp 内部的结构：
+
+
+```c++
+sp<Surface> SurfaceControl::getSurface() const
+{
+    Mutex::Autolock _l(mLock);
+    if (mSurfaceData == nullptr) {
+        return generateSurfaceLocked();
+    }
+    return mSurfaceData;
+}
+
+sp<Surface> SurfaceControl::createSurface() const
+{
+    Mutex::Autolock _l(mLock);
+    return generateSurfaceLocked();
+}
+//最后的最后，是通过surfaceControl来生成surface，surface的创建需要传入生成BufferQueueLayer时创建的GraphicBufferProducer
+sp<Surface> SurfaceControl::generateSurfaceLocked() const
+{
+    // This surface is always consumed by SurfaceFlinger, so the
+    // producerControlledByApp value doesn't matter; using false.
+    mSurfaceData = new Surface(mGraphicBufferProducer, false);
+
+    return mSurfaceData;
+}
+
+```
+
+
+
+### 3.4 小结
+
+* 调用windowManagerService.relayoutWindow方法，传入outSurfaceControl参数让windowManagerService内部构建后进行赋值
+* WMS中顺着逻辑执行createSurfaceControl，调用WindowStateAnimator.createSurfaceLocked创建WindowSurfaceController 对象
+* WindowSurfaceController 构造函数中通过 SurfaceControl.Builder创建SurfaceControl对象，并且WindowSurfaceController 会内部持有该对象
+* SurfaceControl的构造函数中是通过nativeCreate在native层进行构建的，至此java层调用结束
+* android_view_SurfaceControl.nativeCreate通过SurfaceComposerClient->createSurfaceChecked创建surfaceControl对象。
+* SurfaceComposerClient->createSurfaceChecked最会通过Client对象远程binder调用SurfaceFlinger.createLayer方法创建BufferQueueLayer， 创建BufferQueueLayer过程中会生成BufferQueue、GraphicBufferProducer与GraphicBufferConsumer对象。
+* SurfaceComposerClient会使用生成的GraphicBufferProducer以及自身对象创建SurfaceControl
+* SurfaceControl对象生成后，会通过createSurface创建Surface，创建surface过程中会传入之前生成的mGraphicBufferProducer对象，至此整个Surface的创建流程完成。

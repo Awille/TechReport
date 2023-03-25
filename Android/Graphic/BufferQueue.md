@@ -218,27 +218,27 @@ std::set<int> mActiveBuffers;
 
 ## 3、dequeuBuffer
 
-生产者会进行deququeBuffer调用，我们先找到IGraphicBufferProducer看是否有相关的函数：
+生产者会进行deququeBuffer调用，我们先找到IGraphicBufferProducer.h看是否有相关的函数：
 
 ```c++
 该方法请求一个给客户端使用的新的buffer。 请求后缓冲槽的使用权被移交到客户端，这意味着服务端不会使用该缓冲槽对应的graphicBuffer的内容。  在客户端的角度，返回的槽位index，可能不包含BufferSlot，如果槽是空的，客户端应该调用requestBuffer去申请一个缓冲槽到该槽位。  客户端填充完这个缓冲区后，应该使用取消缓冲区或填充其关联缓冲区内容并调用queueBuffer将缓冲区所有权归还给服务器。如果dequeueBuffer返回BUFFER_NEEDS_REALLOCATION，客户端应该立即调用requestBuffer。 
 fence参数将会被更新，以持有与缓冲区相关联的fence。在fence信号之前，不得覆盖缓冲区的内容。如果fence是Fence::NO_FENCE，则可以立即写入缓冲区。
-// 宽度和高度参数必须不大于GL_MAX_VIEWPORT_DIMS和GL_MAX_TEXTURE_SIZE的最小值（参见：glGetIntegerv）。
-// 由于无效的尺寸导致的错误可能要等到调用updateTexImage()才会报告。
-// 如果宽度和高度都为零，则使用setDefaultBufferSize()指定的默认值。
-// 如果格式为0，则将使用默认格式。
-//
-// usage参数指定gralloc缓冲区使用标志。这些值在<gralloc.h>中被枚举，例如GRALLOC_USAGE_HW_RENDER。它们将与IGraphicBufferConsumer::setConsumerUsageBits指定的使用标志合并。
-//
-// 此调用将阻塞，直到有一个可用于出列的缓冲区。如果生产者和消费者都由应用程序控制，则此调用永远不会阻塞，并且如果没有可用的缓冲区，它将返回WOULD_BLOCK。
-//
-// 成功时将返回设置了标志（见上文）的非负值。
-//
-// 返回负值表示发生了错误：
-// * NO_INIT - 缓冲区队列已被放弃或生产者未连接。
-// * BAD_VALUE - 在异步模式下，缓冲区计数小于可同时分配的最大缓冲区数。
-// * INVALID_OPERATION - 无法附加缓冲区，因为它会导致太多的缓冲区出列，要么是因为生产者已经出列了一个单独的缓冲区并且没有设置缓冲区计数，要么是因为已经设置了缓冲区计数，而这个调用会导致其超过限制。
-// * WOULD_BLOCK - 当前没有可用的缓    
+宽度和高度参数必须不大于GL_MAX_VIEWPORT_DIMS和GL_MAX_TEXTURE_SIZE的最小值（参见：glGetIntegerv）。
+由于无效的尺寸导致的错误可能要等到调用updateTexImage()才会报告。
+如果宽度和高度都为零，则使用setDefaultBufferSize()指定的默认值。
+如果格式为0，则将使用默认格式。
+
+usage参数指定gralloc缓冲区使用标志。这些值在<gralloc.h>中被枚举，例如GRALLOC_USAGE_HW_RENDER。它们将与IGraphicBufferConsumer::setConsumerUsageBits指定的使用标志合并。
+
+此调用将阻塞，直到有一个可用于出列的缓冲区。如果生产者和消费者都由应用程序控制，则此调用永远不会阻塞，并且如果没有可用的缓冲区，它将返回WOULD_BLOCK。
+
+成功时将返回设置了标志（见上文）的非负值。
+
+返回负值表示发生了错误：
+* NO_INIT - 缓冲区队列已被放弃或生产者未连接。
+* BAD_VALUE - 在异步模式下，缓冲区计数小于可同时分配的最大缓冲区数。
+* INVALID_OPERATION - 无法附加缓冲区，因为它会导致太多的缓冲区出列，要么是因为生产者已经出列了一个单独的缓冲区并且没有设置缓冲区计数，要么是因为已经设置了缓冲区计数，而这个调用会导致其超过限制。
+* WOULD_BLOCK - 当前没有可用的缓    
     
     
 // dequeueBuffer requests a new buffer slot for the client to use. Ownership
@@ -325,6 +325,239 @@ fence参数将会被更新，以持有与缓冲区相关联的fence。在fence�
 
 
 
+查看其实现dequeueBuffer，只截取核心代码
+
+```c++
+status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* outFence,
+                                            uint32_t width, uint32_t height, PixelFormat format,
+                                            uint64_t usage, uint64_t* outBufferAge,
+                                            FrameEventHistoryDelta* outTimestamps) {
+    //省略一些状态检查的代码
+    //返回结果初始化
+    status_t returnFlags = NO_ERROR;
+    EGLDisplay eglDisplay = EGL_NO_DISPLAY;
+    EGLSyncKHR eglFence = EGL_NO_SYNC_KHR;
+    bool attachedByConsumer = false;
+
+    { // Autolock scope
+        //给bufferQueueCore的mMutex对象上锁
+        std::unique_lock<std::mutex> lock(mCore->mMutex);
+
+        // If we don't have a free buffer, but we are currently allocating, we wait until allocation
+        // is finished such that we don't allocate in parallel.
+        //如果bufferQueueCore当中mFreeBuffers为空 并且当前有别的生产者正在分配buffer ，等待分配完成
+        if (mCore->mFreeBuffers.empty() && mCore->mIsAllocating) {
+            mDequeueWaitingForAllocation = true;
+            //阻塞等待
+            mCore->waitWhileAllocatingLocked(lock);
+            //重置状态
+            mDequeueWaitingForAllocation = false;
+            //唤醒因为该状态阻塞的线程
+            mDequeueWaitingForAllocationCondition.notify_all();
+        }
+
+        if (format == 0) {
+            //未指定format的话 使用默认format
+            format = mCore->mDefaultBufferFormat;
+        }
+
+        // Enable the usage bits the consumer requested
+        usage |= mCore->mConsumerUsageBits;
+        //如果宽度与高度都为0，使用默认值
+        const bool useDefaultSize = !width && !height;
+        if (useDefaultSize) {
+            width = mCore->mDefaultWidth;
+            height = mCore->mDefaultHeight;
+            if (mCore->mAutoPrerotation &&
+                (mCore->mTransformHintInUse & NATIVE_WINDOW_TRANSFORM_ROT_90)) {
+                std::swap(width, height);
+            }
+        }
+
+        int found = BufferItem::INVALID_BUFFER_SLOT;
+        while (found == BufferItem::INVALID_BUFFER_SLOT) {
+            //循环查找客可用的缓冲槽
+            status_t status = waitForFreeSlotThenRelock(FreeSlotCaller::Dequeue, lock, &found);
+            if (status != NO_ERROR) {
+                return status;
+            }
+
+            // This should not happen
+            if (found == BufferQueueCore::INVALID_BUFFER_SLOT) {
+                BQ_LOGE("dequeueBuffer: no available buffer slots");
+                return -EBUSY;
+            }
+            
+            //将找到的图形缓冲区复制给buffer， 但是这个缓冲区可能未分配好
+            const sp<GraphicBuffer>& buffer(mSlots[found].mGraphicBuffer);
+
+            // If we are not allowed to allocate new buffers,
+            // waitForFreeSlotThenRelock must have returned a slot containing a
+            // buffer. If this buffer would require reallocation to meet the
+            // requested attributes, we free it and attempt to get another one.
+            if (!mCore->mAllowAllocation) {
+                //如果当前不允许分配缓冲区
+                if (buffer->needsReallocation(width, height, format, BQ_LAYER_COUNT, usage)) {
+                    //如果buffer需要重新分配图形缓冲区 并且 当前找到的缓冲槽是一个共享缓冲槽，报错
+                    if (mCore->mSharedBufferSlot == found) {
+                        BQ_LOGE("dequeueBuffer: cannot re-allocate a sharedbuffer");
+                        return BAD_VALUE;
+                    }
+                    mCore->mFreeSlots.insert(found);
+                    mCore->clearBufferSlotLocked(found);
+                    found = BufferItem::INVALID_BUFFER_SLOT;
+                    //开始下次查找
+                    continue;
+                }
+            }
+        }
+        
+        //将找到的缓冲槽的图形缓冲区赋值给buffer，当前要不是已经分配了图形缓冲区，要不是可以分配缓冲区
+        const sp<GraphicBuffer>& buffer(mSlots[found].mGraphicBuffer);
+        if (mCore->mSharedBufferSlot == found &&
+                buffer->needsReallocation(width, height, format, BQ_LAYER_COUNT, usage)) {
+            //不允许是共享缓冲区
+            BQ_LOGE("dequeueBuffer: cannot re-allocate a shared"
+                    "buffer");
+
+            return BAD_VALUE;
+        }
+
+        if (mCore->mSharedBufferSlot != found) {
+            mCore->mActiveBuffers.insert(found);
+        }
+        *outSlot = found;
+        ATRACE_BUFFER_INDEX(found);
+
+        attachedByConsumer = mSlots[found].mNeedsReallocation;
+        mSlots[found].mNeedsReallocation = false;
+
+        mSlots[found].mBufferState.dequeue();
+        if ((buffer == nullptr) ||
+                buffer->needsReallocation(width, height, format, BQ_LAYER_COUNT, usage))
+        {
+            //如果图形缓冲区为null 并且需要重新分配
+            mSlots[found].mAcquireCalled = false;
+            mSlots[found].mGraphicBuffer = nullptr;
+            mSlots[found].mRequestBufferCalled = false;
+            mSlots[found].mEglDisplay = EGL_NO_DISPLAY;
+            mSlots[found].mEglFence = EGL_NO_SYNC_KHR;
+            mSlots[found].mFence = Fence::NO_FENCE;
+            mCore->mBufferAge = 0;
+            mCore->mIsAllocating = true;
+            //标记需要重新分配缓冲区的FLAG
+            returnFlags |= BUFFER_NEEDS_REALLOCATION;
+        } else {
+            // We add 1 because that will be the frame number when this buffer
+            // is queued
+            mCore->mBufferAge = mCore->mFrameCounter + 1 - mSlots[found].mFrameNumber;
+        }
+
+        eglDisplay = mSlots[found].mEglDisplay;
+        eglFence = mSlots[found].mEglFence;
+        // Don't return a fence in shared buffer mode, except for the first
+        // frame.
+        *outFence = (mCore->mSharedBufferMode &&
+                mCore->mSharedBufferSlot == found) ?
+                Fence::NO_FENCE : mSlots[found].mFence;
+        mSlots[found].mEglFence = EGL_NO_SYNC_KHR;
+        mSlots[found].mFence = Fence::NO_FENCE;
+
+        // If shared buffer mode has just been enabled, cache the slot of the
+        // first buffer that is dequeued and mark it as the shared buffer.
+        if (mCore->mSharedBufferMode && mCore->mSharedBufferSlot ==
+                BufferQueueCore::INVALID_BUFFER_SLOT) {
+            mCore->mSharedBufferSlot = found;
+            mSlots[found].mBufferState.mShared = true;
+        }
+
+        if (!(returnFlags & BUFFER_NEEDS_REALLOCATION)) {
+            if (mCore->mConsumerListener != nullptr) {
+                mCore->mConsumerListener->onFrameDequeued(mSlots[*outSlot].mGraphicBuffer->getId());
+            }
+        }
+    } // Autolock scope
+
+    if (returnFlags & BUFFER_NEEDS_REALLOCATION) {
+        BQ_LOGV("dequeueBuffer: allocating a new buffer for slot %d", *outSlot);
+        //开始分配图形缓冲区
+        sp<GraphicBuffer> graphicBuffer = new GraphicBuffer(
+                width, height, format, BQ_LAYER_COUNT, usage,
+                {mConsumerName.string(), mConsumerName.size()});
+        //图形缓冲区初始化检查
+        status_t error = graphicBuffer->initCheck();
+
+        { // Autolock scope
+            std::lock_guard<std::mutex> lock(mCore->mMutex);
+
+            if (error == NO_ERROR && !mCore->mIsAbandoned) {
+                graphicBuffer->setGenerationNumber(mCore->mGenerationNumber);
+                //赋值给缓冲槽
+                mSlots[*outSlot].mGraphicBuffer = graphicBuffer;
+                if (mCore->mConsumerListener != nullptr) {
+                    mCore->mConsumerListener->onFrameDequeued(
+                            mSlots[*outSlot].mGraphicBuffer->getId());
+                }
+            }
+
+            mCore->mIsAllocating = false;
+            mCore->mIsAllocatingCondition.notify_all();
+
+            if (error != NO_ERROR) {
+                mCore->mFreeSlots.insert(*outSlot);
+                mCore->clearBufferSlotLocked(*outSlot);
+                BQ_LOGE("dequeueBuffer: createGraphicBuffer failed");
+                return error;
+            }
+
+            if (mCore->mIsAbandoned) {
+                mCore->mFreeSlots.insert(*outSlot);
+                mCore->clearBufferSlotLocked(*outSlot);
+                BQ_LOGE("dequeueBuffer: BufferQueue has been abandoned");
+                return NO_INIT;
+            }
+
+            VALIDATE_CONSISTENCY();
+        } // Autolock scope
+    }
+
+    if (attachedByConsumer) {
+        returnFlags |= BUFFER_NEEDS_REALLOCATION;
+    }
+
+    if (eglFence != EGL_NO_SYNC_KHR) {
+        EGLint result = eglClientWaitSyncKHR(eglDisplay, eglFence, 0,
+                1000000000);
+        // If something goes wrong, log the error, but return the buffer without
+        // synchronizing access to it. It's too late at this point to abort the
+        // dequeue operation.
+        if (result == EGL_FALSE) {
+            BQ_LOGE("dequeueBuffer: error %#x waiting for fence",
+                    eglGetError());
+        } else if (result == EGL_TIMEOUT_EXPIRED_KHR) {
+            BQ_LOGE("dequeueBuffer: timeout waiting for fence");
+        }
+        eglDestroySyncKHR(eglDisplay, eglFence);
+    }
+
+    BQ_LOGV("dequeueBuffer: returning slot=%d/%" PRIu64 " buf=%p flags=%#x",
+            *outSlot,
+            mSlots[*outSlot].mFrameNumber,
+            mSlots[*outSlot].mGraphicBuffer->handle, returnFlags);
+
+    if (outBufferAge) {
+        *outBufferAge = mCore->mBufferAge;
+    }
+    addAndGetFrameTimestamps(nullptr, outTimestamps);
+
+    return returnFlags;
+}
+```
+
+
+
+### 3、BufferSlot查找
+
 # 附录-专有名词解释
 
 ## 1、BP(Binder Proxy) and BN(Binder Native)
@@ -359,3 +592,19 @@ c++的inline用于请求编译器将代码插入到调用该函数的代码中�
 ## 4、status_t
 
 `status_t` 是一种在 Android 开发中常见的数据类型，它实际上是一个整数类型，通常用于表示函数或方法的执行状态。在 Android 开发中，通常将 `status_t` 声明为一个 `int32_t` 类型的别名，其定义在 `<utils/Errors.h>` 中。
+
+## 5、Virtual 虚函数
+
+在 C++ 中，虚函数是一种特殊的成员函数，可以在派生类中覆盖基类中的同名函数，并在运行时确定要调用哪个函数。使用虚函数可以实现多态，允许使用基类的指针或引用调用派生类的函数，提高代码的灵活性和可扩展性。
+
+## 6、std::lock_guard<std::mutex> & std::unique_lock<std::mutex>
+
+std::mutex是C++11标准库中的一个类，用于提供线程安全的互斥访问。它是一个可移植的方式来避免多个线程同时访问共享资源，以避免数据竞争和不一致性问题。当一个线程正在访问临界资源时，其他线程将被阻塞直到该线程释放锁。
+
+`std::lock_guard<std::mutex>` 和 `std::unique_lock<std::mutex>` 都是 C++ 中用于实现互斥锁的类。它们的区别在于：
+
+- `std::lock_guard` 是一个轻量级的 RAII（Resource Acquisition Is Initialization）包装器，使用起来更加简洁，适用于快速加锁解锁的场景。它的构造函数会立即获取所传入的互斥量的所有权，并在析构函数中释放该所有权，因此不需要显式调用 unlock() 方法。由于 `std::lock_guard` 没有提供 unlock() 方法，因此不能在获取锁的同时，将锁的所有权转移给另一个线程。
+- `std::unique_lock` 是一个更加灵活的互斥锁包装器，提供了比 `std::lock_guard` 更多的功能。它的构造函数可以指定锁的类型（默认是可重入锁），并支持手动加锁和解锁操作。此外，`std::unique_lock` 还支持锁的所有权转移，即一个线程可以将锁的所有权转移到另一个线程，从而避免了线程切换的开销。
+
+在代码中，如果只是需要加锁解锁，没有特殊的要求，推荐使用 `std::lock_guard<std::mutex>`，因为它使用起来更加简洁。如果需要更灵活的锁操作，比如手动加锁和解锁，或者锁的所有权转移等，可以使用 `std::unique_lock<std::mutex>`。
+
