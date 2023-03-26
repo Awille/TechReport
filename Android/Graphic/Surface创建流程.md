@@ -1259,6 +1259,89 @@ status_t SurfaceComposerClient::createSurfaceChecked(const String8& name, uint32
 
 可以到这里可以看到SurfaceControl被创建生成出来了，具体的surface内呢？ 看到
 
+回到上层调用
+
+E:\AOSP\frameworks\base\core\java\android\view\ViewRootImpl.java
+
+```java
+private int relayoutWindow(WindowManager.LayoutParams params, int viewVisibility,
+        boolean insetsPending) throws RemoteException {
+
+    int relayoutResult = mWindowSession.relayout(mWindow, mSeq, params,
+            (int) (mView.getMeasuredWidth() * appScale + 0.5f),
+            (int) (mView.getMeasuredHeight() * appScale + 0.5f), viewVisibility,
+            insetsPending ? WindowManagerGlobal.RELAYOUT_INSETS_PENDING : 0, frameNumber,
+            mTmpFrame, mPendingOverscanInsets, mPendingContentInsets, mPendingVisibleInsets,
+            mPendingStableInsets, mPendingOutsets, mPendingBackDropFrame, mPendingDisplayCutout,
+            mPendingMergedConfiguration, mSurfaceControl, mTempInsets);
+    if (mSurfaceControl.isValid()) {
+        //mSurfaceControl创建成功
+        mSurface.copyFrom(mSurfaceControl);
+    } else {
+        destroySurface();
+    }
+    return relayoutResult;
+}
+```
+
+E:\AOSP\frameworks\base\core\java\android\view\Surface.java
+
+```java
+@UnsupportedAppUsage
+public void copyFrom(SurfaceControl other) {
+    if (other == null) {
+        throw new IllegalArgumentException("other must not be null");
+    }
+
+    long surfaceControlPtr = other.mNativeObject;
+    if (surfaceControlPtr == 0) {
+        throw new NullPointerException(
+                "null SurfaceControl native object. Are you using a released SurfaceControl?");
+    }
+    //这里是关键
+    long newNativeObject = nativeGetFromSurfaceControl(mNativeObject, surfaceControlPtr);
+
+    synchronized (mLock) {
+        if (newNativeObject == mNativeObject) {
+            return;
+        }
+        if (mNativeObject != 0) {
+            nativeRelease(mNativeObject);
+        }
+        setNativeObjectLocked(newNativeObject);
+    }
+}
+```
+
+
+
+E:\AOSP\frameworks\base\core\jni\android_view_Surface.cpp
+
+```c++
+static jlong nativeGetFromSurfaceControl(JNIEnv* env, jclass clazz,
+        jlong nativeObject,
+        jlong surfaceControlNativeObj) {
+    Surface* self(reinterpret_cast<Surface *>(nativeObject));
+    sp<SurfaceControl> ctrl(reinterpret_cast<SurfaceControl *>(surfaceControlNativeObj));
+
+    // If the underlying IGBP's are the same, we don't need to do anything.
+    if (self != nullptr &&
+            IInterface::asBinder(self->getIGraphicBufferProducer()) ==
+            IInterface::asBinder(ctrl->getIGraphicBufferProducer())) {
+        return nativeObject;
+    }
+    //调用SurfaceControl.getSurface获得surface
+    sp<Surface> surface(ctrl->getSurface());
+    if (surface != NULL) {
+        surface->incStrong(&sRefBaseOwner);
+    }
+
+    return reinterpret_cast<jlong>(surface.get());
+}
+```
+
+
+
 E:\AOSP\frameworks\native\libs\gui\SurfaceControl.cpp 内部的结构：
 
 
@@ -1267,16 +1350,12 @@ sp<Surface> SurfaceControl::getSurface() const
 {
     Mutex::Autolock _l(mLock);
     if (mSurfaceData == nullptr) {
+        //创建surface
         return generateSurfaceLocked();
     }
     return mSurfaceData;
 }
 
-sp<Surface> SurfaceControl::createSurface() const
-{
-    Mutex::Autolock _l(mLock);
-    return generateSurfaceLocked();
-}
 //最后的最后，是通过surfaceControl来生成surface，surface的创建需要传入生成BufferQueueLayer时创建的GraphicBufferProducer
 sp<Surface> SurfaceControl::generateSurfaceLocked() const
 {
@@ -1289,7 +1368,7 @@ sp<Surface> SurfaceControl::generateSurfaceLocked() const
 
 ```
 
-
+至此整个surface的创建过程完成
 
 ### 3.4 小结
 
