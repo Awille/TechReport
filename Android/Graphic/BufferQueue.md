@@ -558,6 +558,203 @@ status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<android::Fence>* ou
 
 ### 3、BufferSlot查找
 
+
+
+# 应用程序上层调用
+
+当应用进程接收到 VSync 信号后，会回调到 `onVSync()` 方法。在 `onVSync()` 方法中，应用程序可以通过调用 `Choreographer` 类的 `postFrameCallback()` 方法向消息队列中添加一个回调，该回调会在下一个 `VSync` 时刻触发。该回调中可以调用 `SurfaceView` 的 `getHolder()` 方法获取到 `SurfaceHolder` 对象，并通过调用 `SurfaceHolder` 的 `getSurface()` 方法获取到 `Surface` 对象。然后，通过调用 `Surface` 的 `lockCanvas()` 方法锁定画布，并在画布上绘制图像。
+
+在 `lockCanvas()` 方法中，应用程序可以通过调用 `SurfaceFlinger` 的 `dequeueBuffer()` 方法从图形缓冲区队列中取出一个空闲的缓冲区。`dequeueBuffer()` 方法返回一个 `BufferItem` 结构体，其中包含了该缓冲区的索引、时间戳、裁剪矩形等信息。应用程序可以将要绘制的图像绘制在该缓冲区上，并通过调用 `Surface` 的 `unlockCanvasAndPost()` 方法将缓冲区释放，并将缓冲区提交到 SurfaceFlinger 的图形缓冲区队列中等待后续的处理。
+
+需要注意的是，在 Android 中，Surface 对象通常是由 SurfaceView 或 TextureView 创建的，并且 Surface 对象通常与一个或多个图形缓冲区相关联。当应用程序绘制图像时，必须首先从图形缓冲区队列中获取一个空闲的缓冲区，并在该缓冲区上绘制图像。完成绘制后，应用程序必须释放该缓冲区，并将其提交到图形缓冲区队列中等待 SurfaceFlinger 进程进行处理。
+
+E:\AOSP\frameworks\base\core\java\android\view\ViewRootImpl.java
+
+```java
+private void performDraw() {
+        try {
+            boolean canUseAsync = draw(fullRedrawNeeded);
+            if (usingAsyncReport && !canUseAsync) {
+                mAttachInfo.mThreadedRenderer.setFrameCompleteCallback(null);
+                usingAsyncReport = false;
+            }
+        } finally {
+            mIsDrawing = false;
+            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+        }
+    }
+
+private boolean draw(boolean fullRedrawNeeded) {
+    Surface surface = mSurface;
+    mAttachInfo.mTreeObserver.dispatchOnDraw();
+
+    int xOffset = -mCanvasOffsetX;
+    int yOffset = -mCanvasOffsetY + curScrollY;
+    final WindowManager.LayoutParams params = mWindowAttributes;
+
+    boolean useAsyncReport = false;
+    if (!dirty.isEmpty() || mIsAnimating || accessibilityFocusDirty) {
+        if (mAttachInfo.mThreadedRenderer != null && mAttachInfo.mThreadedRenderer.isEnabled()) {
+        } else {
+            //draw
+            if (!drawSoftware(surface, mAttachInfo, xOffset, yOffset,
+                    scalingRequired, dirty, surfaceInsets)) {
+                return false;
+            }
+        }
+    }
+
+    if (animating) {
+        mFullRedrawNeeded = true;
+        scheduleTraversals();
+    }
+    return useAsyncReport;
+}
+
+
+private boolean drawSoftware(Surface surface, AttachInfo attachInfo, int xoff, int yoff,
+        boolean scalingRequired, Rect dirty, Rect surfaceInsets) {
+
+    // Draw with software renderer.
+    final Canvas canvas;
+
+    try {
+        dirty.offset(-dirtyXOffset, -dirtyYOffset);
+        final int left = dirty.left;
+        final int top = dirty.top;
+        final int right = dirty.right;
+        final int bottom = dirty.bottom;
+        //核心逻辑
+        canvas = mSurface.lockCanvas(dirty);
+        // TODO: Do this in native
+        canvas.setDensity(mDensity);
+    } catch (Surface.OutOfResourcesException e) {
+        handleOutOfResourcesException(e);
+        return false;
+    } catch (IllegalArgumentException e) {
+        return false;
+    } finally {
+        dirty.offset(dirtyXOffset, dirtyYOffset);  // Reset to the original value.
+    }
+
+    try {
+        canvas.setScreenDensity(scalingRequired ? mNoncompatDensity : 0);
+
+        mView.draw(canvas);
+
+        drawAccessibilityFocusedDrawableIfNeeded(canvas);
+    } finally {
+        try {
+            //draw结束后 unlock
+            surface.unlockCanvasAndPost(canvas);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+    return true;
+}
+```
+
+E:\AOSP\frameworks\base\core\java\android\view\Surface.java
+
+```java
+public Canvas lockCanvas(Rect inOutDirty)
+        throws Surface.OutOfResourcesException, IllegalArgumentException {
+    synchronized (mLock) {
+        checkNotReleasedLocked();
+        if (mLockedObject != 0) {
+            // Ideally, nativeLockCanvas() would throw in this situation and prevent the
+            // double-lock, but that won't happen if mNativeObject was updated.  We can't
+            // abandon the old mLockedObject because it might still be in use, so instead
+            // we just refuse to re-lock the Surface.
+            throw new IllegalArgumentException("Surface was already locked");
+        }
+        mLockedObject = nativeLockCanvas(mNativeObject, mCanvas, inOutDirty);
+        return mCanvas;
+    }
+}
+
+/**
+ * Posts the new contents of the {@link Canvas} to the surface and
+ * releases the {@link Canvas}.
+ *
+ * @param canvas The canvas previously obtained from {@link #lockCanvas}.
+ */
+public void unlockCanvasAndPost(Canvas canvas) {
+    synchronized (mLock) {
+        checkNotReleasedLocked();
+
+        if (mHwuiContext != null) {
+            mHwuiContext.unlockAndPost(canvas);
+        } else {
+            unlockSwCanvasAndPost(canvas);
+        }
+    }
+}
+```
+
+E:\AOSP\frameworks\base\core\jni\android_view_Surface.cpp
+
+```c++
+static jlong nativeLockCanvas(JNIEnv* env, jclass clazz,
+        jlong nativeObject, jobject canvasObj, jobject dirtyRectObj) {
+    sp<Surface> surface(reinterpret_cast<Surface *>(nativeObject));
+
+    Rect dirtyRect(Rect::EMPTY_RECT);
+    Rect* dirtyRectPtr = NULL;
+
+    if (dirtyRectObj) {
+        dirtyRect.left   = env->GetIntField(dirtyRectObj, gRectClassInfo.left);
+        dirtyRect.top    = env->GetIntField(dirtyRectObj, gRectClassInfo.top);
+        dirtyRect.right  = env->GetIntField(dirtyRectObj, gRectClassInfo.right);
+        dirtyRect.bottom = env->GetIntField(dirtyRectObj, gRectClassInfo.bottom);
+        dirtyRectPtr = &dirtyRect;
+    }
+
+    ANativeWindow_Buffer outBuffer;
+    //实际是native的surface进行lock
+    status_t err = surface->lock(&outBuffer, dirtyRectPtr);
+    return (jlong) lockedSurface.get();
+}
+```
+
+E:\AOSP\frameworks\native\libs\gui\Surface.cpp
+
+```c++
+status_t Surface::lock(
+        ANativeWindow_Buffer* outBuffer, ARect* inOutDirtyBounds)
+{
+    .......
+    //dequeueBuffer 流程结束
+    status_t err = dequeueBuffer(&out, &fenceFd);
+    ......
+    return err;
+}
+
+
+status_t Surface::unlockAndPost()
+{
+    if (mLockedBuffer == nullptr) {
+        ALOGE("Surface::unlockAndPost failed, no locked buffer");
+        return INVALID_OPERATION;
+    }
+
+    int fd = -1;
+    status_t err = mLockedBuffer->unlockAsync(&fd);
+    ALOGE_IF(err, "failed unlocking buffer (%p)", mLockedBuffer->handle);
+
+    err = queueBuffer(mLockedBuffer.get(), fd);
+    ALOGE_IF(err, "queueBuffer (handle=%p) failed (%s)",
+            mLockedBuffer->handle, strerror(-err));
+
+    mPostedBuffer = mLockedBuffer;
+    mLockedBuffer = nullptr;
+    return err;
+}
+```
+
+
+
 # 附录-专有名词解释
 
 ## 1、BP(Binder Proxy) and BN(Binder Native)
