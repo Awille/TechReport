@@ -19,6 +19,38 @@
 
 
 
+### [167. 两数之和 II - 输入有序数组](https://leetcode.cn/problems/two-sum-ii-input-array-is-sorted/)
+
+```java
+class Solution {
+    public int[] twoSum(int[] numbers, int target) {
+        int left = 0, right = numbers.length - 1;
+        while(left < right) {
+            int sum = numbers[left] + numbers[right];
+            if (sum == target) {
+                return new int[]{left + 1, right  + 1};
+            }
+            if (sum > target) {
+                right --;
+            } else {
+                left ++;
+            }
+        }
+        return null;
+    }
+}
+```
+
+
+
+### [97. 交错字符串](https://leetcode.cn/problems/interleaving-string/)
+
+
+
+
+
+
+
 ## 二叉树
 
 ### [剑指 Offer 28. 对称的二叉树](https://leetcode.cn/problems/dui-cheng-de-er-cha-shu-lcof/)
@@ -324,15 +356,48 @@ class Solution {
 
 
 
-### [239. 滑动窗口最大值](https://leetcode.cn/problems/sliding-window-maximum/)
-
-2022/0320
-
 
 
 ### [567. 字符串的排列](https://leetcode.cn/problems/permutation-in-string/)
 
+给你两个字符串 s1 和 s2 ，写一个函数来判断 s2 是否包含 s1 的排列。如果是，返回 true ；否则，返回 false 。
 
+换句话说，s1 的排列之一是 s2 的 子串 。
+
+```
+输入：s1 = "ab" s2 = "eidbaooo"
+输出：true
+解释：s2 包含 s1 的排列之一 ("ba").
+```
+
+```java
+//思路很简单，26个字母作为小标，计算出现个数，相等就行，判断相同记得使用Arrays.equals(a, b)
+class Solution {
+    public boolean checkInclusion(String s1, String s2) {
+        if (s1.length() > s2.length()) {
+            return false;
+        }
+        int[] a = new int[26];
+        int[] b = new int[26];
+        for (int i = 0; i < s1.length(); i ++) {
+            ++a[s1.charAt(i) - 'a'];
+            ++b[s2.charAt(i) - 'a'];
+        }
+        if (Arrays.equals(a, b)) {
+            return true;
+        }
+        for (int i = s1.length(); i < s2.length(); i ++) {
+            ++b[s2.charAt(i) - 'a'];
+            --b[s2.charAt(i - s1.length()) - 'a'];
+            if (Arrays.equals(a, b)) {
+                return true;
+            }
+        }
+        return false;
+        
+    }
+}
+```
 
 
 
