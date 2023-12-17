@@ -82,3 +82,8 @@ npm install
 
 demo参照：
 https://github.com/Awille/ReactJsProject
+
+
+
+其他错误参考：
+https://blog.csdn.net/u011374875/article/details/119849719
