@@ -712,6 +712,121 @@ class RCTDeviceEventEmitter extends EventEmitter {
 
 Libraries\Renderer\implementations\ReactFabric-dev.js
 
+```javascript
+var ResponderEventPlugin = {
+  /* For unit testing only */
+  _getResponder: function() {
+    return responderInst;
+  },
+  eventTypes: eventTypes,
+
+  /**
+   * We must be resilient to `targetInst` being `null` on `touchMove` or
+   * `touchEnd`. On certain platforms, this means that a native scroll has
+   * assumed control and the original touch targets are destroyed.
+   */
+  extractEvents: function(
+    topLevelType,
+    targetInst,
+    nativeEvent,
+    nativeEventTarget,
+    eventSystemFlags
+  ) {
+    if (isStartish(topLevelType)) {
+      //ACTION_DOWN事件时trackedTouchCount + 1
+      trackedTouchCount += 1;
+    } else if (isEndish(topLevelType)) {
+        //ACTION_UP或者ACTION_CANCEL事件时trackedTouchCount - 1
+      if (trackedTouchCount >= 0) {
+        trackedTouchCount -= 1;
+      } else {
+        return null;
+      }
+    }
+    //canTriggerTransfer Action_DOWN 跟 Action_Move事件会返回true，其他的返回false
+    var extracted = canTriggerTransfer(topLevelType, targetInst, nativeEvent)
+      ? setResponderAndExtractTransfer(
+          topLevelType,
+          targetInst,
+          nativeEvent,
+          nativeEventTarget
+        )
+      : null; // Responder may or may not have transferred on a new touch start/move.
+    // Regardless, whoever is the responder after any potential transfer, we
+    // direct all touch start/move/ends to them in the form of
+    // `onResponderMove/Start/End`. These will be called for *every* additional
+    // finger that move/start/end, dispatched directly to whoever is the
+    // current responder at that moment, until the responder is "released".
+    //
+    // These multiple individual change touch events are are always bookended
+    // by `onResponderGrant`, and one of
+    // (`onResponderRelease/onResponderTerminate`).
+
+    var isResponderTouchStart = responderInst && isStartish(topLevelType);
+    var isResponderTouchMove = responderInst && isMoveish(topLevelType);
+    var isResponderTouchEnd = responderInst && isEndish(topLevelType);
+    var incrementalTouch = isResponderTouchStart
+      ? eventTypes.responderStart
+      : isResponderTouchMove
+      ? eventTypes.responderMove
+      : isResponderTouchEnd
+      ? eventTypes.responderEnd
+      : null;
+
+    if (incrementalTouch) {
+      var gesture = ResponderSyntheticEvent.getPooled(
+        incrementalTouch,
+        responderInst,
+        nativeEvent,
+        nativeEventTarget
+      );
+      gesture.touchHistory = ResponderTouchHistoryStore.touchHistory;
+      accumulateDirectDispatches(gesture);
+      extracted = accumulate(extracted, gesture);
+    }
+
+    var isResponderTerminate =
+      responderInst && topLevelType === TOP_TOUCH_CANCEL;
+    var isResponderRelease =
+      responderInst &&
+      !isResponderTerminate &&
+      isEndish(topLevelType) &&
+      noResponderTouches(nativeEvent);
+    var finalTouch = isResponderTerminate
+      ? eventTypes.responderTerminate
+      : isResponderRelease
+      ? eventTypes.responderRelease
+      : null;
+
+    if (finalTouch) {
+      var finalEvent = ResponderSyntheticEvent.getPooled(
+        finalTouch,
+        responderInst,
+        nativeEvent,
+        nativeEventTarget
+      );
+      finalEvent.touchHistory = ResponderTouchHistoryStore.touchHistory;
+      accumulateDirectDispatches(finalEvent);
+      extracted = accumulate(extracted, finalEvent);
+      changeResponder(null);
+    }
+
+    return extracted;
+  },
+  GlobalResponderHandler: null,
+  injection: {
+    /**
+     * @param {{onChange: (ReactID, ReactID) => void} GlobalResponderHandler
+     * Object that handles any change in responder. Use this to inject
+     * integration with an existing touch handling system etc.
+     */
+    injectGlobalResponderHandler: function(GlobalResponderHandler) {
+      ResponderEventPlugin.GlobalResponderHandler = GlobalResponderHandler;
+    }
+  }
+};
+```
+
 
 
 ##  附录
