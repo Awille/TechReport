@@ -710,7 +710,7 @@ class RCTDeviceEventEmitter extends EventEmitter {
 
 具体参照
 
-Libraries\Renderer\implementations\ReactFabric-dev.js
+Libraries/Renderer/implementations/ReactNativeRenderer-dev.js
 
 ```javascript
 var ResponderEventPlugin = {
@@ -827,6 +827,942 @@ var ResponderEventPlugin = {
 };
 ```
 
+RN中console.log的日志，输出在浏览器的console当中
+
+
+
+在extractEvents: function(
+    topLevelType,
+    targetInst,
+    nativeEvent,
+    nativeEventTarget,
+    eventSystemFlags
+  ) 
+
+中打印日志，测试代码为：
+
+```javascript
+extractEvents: function(
+    topLevelType,
+    targetInst,
+    nativeEvent,
+    nativeEventTarget,
+    eventSystemFlags
+) {
+    console.log(`topLevelType: ${topLevelType}`);
+}
+```
+
+一次点击，输出为：
+
+```javascript
+topLevelType: topTouchStart
+topLevelType: topTouchMove1
+topLevelType: topTouchMove1
+topLevelType: topTouchEnd
+```
+
+可以看到输出了一个topTouchStart ，两个topTouchMove， 最后一个topTouchEnd， 跟我们Native的日志基本能保持一致
+
+正常情况的日志：
+
+```shell
+[Sat Jun 15 2024 22:12:24.578]  LOG      new topLevelType: topTouchStart
+[Sat Jun 15 2024 22:12:24.657]  LOG      isStartish true
+[Sat Jun 15 2024 22:12:24.658]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sat Jun 15 2024 22:12:24.659]  LOG      skipOverBubbleShouldSetFrom: false
+[Sat Jun 15 2024 22:12:24.659]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+[Sat Jun 15 2024 22:12:24.659]  LOG      new topLevelType: topTouchCancel
+[Sat Jun 15 2024 22:12:24.659]  LOG      isEndish true trackedTouchCount: 1
+[Sat Jun 15 2024 22:12:24.660]  LOG      isResponderTerminate： true，
+        finalTouch： {"dependencies": [], "registrationName": "onResponderTerminate"}
+        
+        
+[Sat Jun 15 2024 22:12:24.660]  LOG      new topLevelType: topTouchStart
+[Sat Jun 15 2024 22:12:24.660]  LOG      isStartish true
+[Sat Jun 15 2024 22:12:24.660]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sat Jun 15 2024 22:12:24.660]  LOG      skipOverBubbleShouldSetFrom: false
+[Sat Jun 15 2024 22:12:24.661]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+[Sat Jun 15 2024 22:12:24.661]  LOG      new topLevelType: topTouchMove
+[Sat Jun 15 2024 22:12:24.661]  LOG      setResponderAndExtractTransfer: topTouchMove
+[Sat Jun 15 2024 22:12:24.661]  LOG      skipOverBubbleShouldSetFrom: true
+[Sat Jun 15 2024 22:12:24.662]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+[Sat Jun 15 2024 22:12:24.662]  LOG      new topLevelType: topTouchMove
+[Sat Jun 15 2024 22:12:24.662]  LOG      setResponderAndExtractTransfer: topTouchMove
+[Sat Jun 15 2024 22:12:24.662]  LOG      skipOverBubbleShouldSetFrom: true
+[Sat Jun 15 2024 22:12:24.663]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+[Sat Jun 15 2024 22:12:24.663]  LOG      new topLevelType: topTouchEnd
+[Sat Jun 15 2024 22:12:24.664]  LOG      isEndish true trackedTouchCount: 1
+[Sat Jun 15 2024 22:12:24.664]  LOG      isResponderTerminate： false，
+        finalTouch： {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderRelease"}
+```
+
+
+
+
+
+异常情况日志：
+
+
+
+```shell
+[Sat Jun 15 2024 22:33:18.307]  LOG      new topLevelType: topTouchStart, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 90.28571319580078, "locationY": 91.42857360839844, "pageX": 219.42857360839844, "pageY": 531.047607421875, "target": 707, "timestamp": 259739139, "touches": [[Circular]]}
+[Sat Jun 15 2024 22:33:18.353]  LOG      isStartish true
+[Sat Jun 15 2024 22:33:18.353]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sat Jun 15 2024 22:33:18.354]  LOG      skipOverBubbleShouldSetFrom: false
+[Sat Jun 15 2024 22:33:18.354]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+        
+[Sat Jun 15 2024 22:33:18.354]  LOG      new topLevelType: topTouchStart, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 90.28571319580078, "locationY": 91.42857360839844, "pageX": 198.85714721679688, "pageY": 216.38095092773438, "target": 707, "timestamp": 259739153, "touches": [[Circular]]}
+[Sat Jun 15 2024 22:33:18.354]  LOG      isStartish true
+[Sat Jun 15 2024 22:33:18.355]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sat Jun 15 2024 22:33:18.355]  LOG      skipOverBubbleShouldSetFrom: true
+[Sat Jun 15 2024 22:33:18.355]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+        
+[Sat Jun 15 2024 22:33:18.355]  LOG      new topLevelType: topTouchMove, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 90.28571319580078, "locationY": 91.42857360839844, "pageX": 198.85714721679688, "pageY": 216.38095092773438, "target": 707, "timestamp": 259739163, "touches": [[Circular]]}
+[Sat Jun 15 2024 22:33:18.356]  LOG      setResponderAndExtractTransfer: topTouchMove
+[Sat Jun 15 2024 22:33:18.356]  LOG      skipOverBubbleShouldSetFrom: true
+[Sat Jun 15 2024 22:33:18.356]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+[Sat Jun 15 2024 22:33:18.393]  LOG      new topLevelType: topTouchMove, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 90.28571319580078, "locationY": 91.42857360839844, "pageX": 198.85714721679688, "pageY": 216.38095092773438, "target": 707, "timestamp": 259739200, "touches": [[Circular]]}
+[Sat Jun 15 2024 22:33:18.394]  LOG      setResponderAndExtractTransfer: topTouchMove
+[Sat Jun 15 2024 22:33:18.394]  LOG      skipOverBubbleShouldSetFrom: true
+[Sat Jun 15 2024 22:33:18.394]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+[Sat Jun 15 2024 22:33:18.394]  LOG      new topLevelType: topTouchEnd, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 90.28571319580078, "locationY": 91.42857360839844, "pageX": 219.42857360839844, "pageY": 531.047607421875, "target": 707, "timestamp": 259739203, "touches": []}
+[Sat Jun 15 2024 22:33:18.395]  LOG      isEndish true trackedTouchCount: 2
+[Sat Jun 15 2024 22:33:18.395]  LOG      isResponderTerminate： false，
+        finalTouch： {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderRelease"}
+        
+        
+[Sat Jun 15 2024 22:33:18.395]  LOG      new topLevelType: topTouchEnd, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 90.28571319580078, "locationY": 91.42857360839844, "pageX": 198.85714721679688, "pageY": 216.38095092773438, "target": 707, "timestamp": 259739207, "touches": []}
+[Sat Jun 15 2024 22:33:18.395]  LOG      isEndish true trackedTouchCount: 1
+[Sat Jun 15 2024 22:33:18.396]  LOG      isResponderTerminate： null，
+        finalTouch： null
+```
+
+
+
+可以发现所有的事件都发了两遍，并且最后的事件有些不对
+
+对比extracted， 发现elementType不一样
+
+有问题的：
+
+```shell
+[
+  {
+    "_dispatchInstances": null,
+    "_dispatchListeners": null,
+    "_targetInst": {
+      "_debugHookTypes": null,
+      "_debugID": 2678,
+      "_debugIsCurrentlyTiming": false,
+      "_debugNeedsRemount": false,
+      "_debugOwner": "[FiberNode]",
+      "_debugSource": {},
+      "actualDuration": 1,
+      "actualStartTime": 733,
+      "alternate": null,
+      "child": "[FiberNode]",
+      "childExpirationTime": 0,
+      "dependencies": null,
+      "effectTag": 128,
+      "elementType": "RCTView",
+      "expirationTime": 0,
+      "firstEffect": null,
+      "index": 0,
+      "key": null,
+      "lastEffect": null,
+      "memoizedProps": {},
+      "memoizedState": null,
+      "mode": 8,
+      "nextEffect": null,
+      "pendingProps": {},
+      "ref": "[Function forwardRef]",
+      "return": "[FiberNode]",
+      "selfBaseDuration": 0,
+      "sibling": null,
+      "stateNode": "[ReactNativeFiberHostComponent]",
+      "tag": 5,
+      "treeBaseDuration": 1,
+      "type": "RCTView",
+      "updateQueue": null
+    },
+    "bubbles": null,
+    "cancelable": null,
+    "currentTarget": null,
+    "defaultPrevented": null,
+    "dispatchConfig": {
+      "dependencies": [],
+      "registrationName": "onResponderEnd"
+    },
+    "eventPhase": null,
+    "isDefaultPrevented": "[Function functionThatReturnsFalse]",
+    "isPropagationStopped": "[Function functionThatReturnsFalse]",
+    "isTrusted": null,
+    "nativeEvent": {
+      "changedTouches": [],
+      "identifier": 0,
+      "locationX": 93.71428680419922,
+      "locationY": 98.66666412353516,
+      "pageX": 222.85714721679688,
+      "pageY": 403.047607421875,
+      "target": 707,
+      "timestamp": 260103852,
+      "touches": []
+    },
+    "target": {
+      "_children": [],
+      "_internalFiberInstanceHandleDEV": "[FiberNode]",
+      "_nativeTag": 707,
+      "viewConfig": {}
+    },
+    "timeStamp": 1718462366859,
+    "touchHistory": {
+      "indexOfSingleActiveTouch": 0,
+      "mostRecentTimeStamp": 260103852,
+      "numberActiveTouches": 0,
+      "touchBank": []
+    },
+    "type": null
+  },
+  {
+    "_dispatchInstances": {
+      "_debugHookTypes": null,
+      "_debugID": 2678,
+      "_debugIsCurrentlyTiming": false,
+      "_debugNeedsRemount": false,
+      "_debugOwner": "[FiberNode]",
+      "_debugSource": {},
+      "actualDuration": 1,
+      "actualStartTime": 733,
+      "alternate": null,
+      "child": "[FiberNode]",
+      "childExpirationTime": 0,
+      "dependencies": null,
+      "effectTag": 128,
+      "elementType": "RCTView",
+      "expirationTime": 0,
+      "firstEffect": null,
+      "index": 0,
+      "key": null,
+      "lastEffect": null,
+      "memoizedProps": {},
+      "memoizedState": null,
+      "mode": 8,
+      "nextEffect": null,
+      "pendingProps": {},
+      "ref": "[Function forwardRef]",
+      "return": "[FiberNode]",
+      "selfBaseDuration": 0,
+      "sibling": null,
+      "stateNode": "[ReactNativeFiberHostComponent]",
+      "tag": 5,
+      "treeBaseDuration": 1,
+      "type": "RCTView",
+      "updateQueue": null
+    },
+    "_dispatchListeners": "[Function onResponderRelease]",
+    "_targetInst": {
+      "_debugHookTypes": null,
+      "_debugID": 2678,
+      "_debugIsCurrentlyTiming": false,
+      "_debugNeedsRemount": false,
+      "_debugOwner": "[FiberNode]",
+      "_debugSource": {},
+      "actualDuration": 1,
+      "actualStartTime": 733,
+      "alternate": null,
+      "child": "[FiberNode]",
+      "childExpirationTime": 0,
+      "dependencies": null,
+      "effectTag": 128,
+      "elementType": "RCTView",
+      "expirationTime": 0,
+      "firstEffect": null,
+      "index": 0,
+      "key": null,
+      "lastEffect": null,
+      "memoizedProps": {},
+      "memoizedState": null,
+      "mode": 8,
+      "nextEffect": null,
+      "pendingProps": {},
+      "ref": "[Function forwardRef]",
+      "return": "[FiberNode]",
+      "selfBaseDuration": 0,
+      "sibling": null,
+      "stateNode": "[ReactNativeFiberHostComponent]",
+      "tag": 5,
+      "treeBaseDuration": 1,
+      "type": "RCTView",
+      "updateQueue": null
+    },
+    "bubbles": null,
+    "cancelable": null,
+    "currentTarget": null,
+    "defaultPrevented": null,
+    "dispatchConfig": {
+      "dependencies": [],
+      "registrationName": "onResponderRelease"
+    },
+    "eventPhase": null,
+    "isDefaultPrevented": "[Function functionThatReturnsFalse]",
+    "isPropagationStopped": "[Function functionThatReturnsFalse]",
+    "isTrusted": null,
+    "nativeEvent": {
+      "changedTouches": [],
+      "identifier": 0,
+      "locationX": 93.71428680419922,
+      "locationY": 98.66666412353516,
+      "pageX": 222.85714721679688,
+      "pageY": 403.047607421875,
+      "target": 707,
+      "timestamp": 260103852,
+      "touches": []
+    },
+    "target": {
+      "_children": [],
+      "_internalFiberInstanceHandleDEV": "[FiberNode]",
+      "_nativeTag": 707,
+      "viewConfig": {}
+    },
+    "timeStamp": 1718462366862,
+    "touchHistory": {
+      "indexOfSingleActiveTouch": 0,
+      "mostRecentTimeStamp": 260103852,
+      "numberActiveTouches": 0,
+      "touchBank": []
+    },
+    "type": null
+  }
+]
+
+```
+
+
+
+没问题的：
+
+```shell
+[
+  {
+    "_dispatchInstances": null,
+    "_dispatchListeners": null,
+    "_targetInst": {
+      "_debugHookTypes": null,
+      "_debugID": 2689,
+      "_debugIsCurrentlyTiming": false,
+      "_debugNeedsRemount": false,
+      "_debugOwner": "[FiberNode]",
+      "_debugSource": {},
+      "actualDuration": 0,
+      "actualStartTime": 661,
+      "alternate": null,
+      "child": "[FiberNode]",
+      "childExpirationTime": 0,
+      "dependencies": null,
+      "effectTag": 0,
+      "elementType": "RCTText",
+      "expirationTime": 0,
+      "firstEffect": null,
+      "index": 0,
+      "key": null,
+      "lastEffect": null,
+      "memoizedProps": {},
+      "memoizedState": null,
+      "mode": 8,
+      "nextEffect": null,
+      "pendingProps": {},
+      "ref": null,
+      "return": "[FiberNode]",
+      "selfBaseDuration": 0,
+      "sibling": null,
+      "stateNode": "[ReactNativeFiberHostComponent]",
+      "tag": 5,
+      "treeBaseDuration": 0,
+      "type": "RCTText",
+      "updateQueue": null
+    },
+    "bubbles": null,
+    "cancelable": null,
+    "currentTarget": null,
+    "defaultPrevented": null,
+    "dispatchConfig": {
+      "dependencies": [],
+      "registrationName": "onResponderEnd"
+    },
+    "eventPhase": null,
+    "isDefaultPrevented": "[Function functionThatReturnsFalse]",
+    "isPropagationStopped": "[Function functionThatReturnsFalse]",
+    "isTrusted": null,
+    "nativeEvent": {
+      "changedTouches": [],
+      "identifier": 0,
+      "locationX": 59.80952453613281,
+      "locationY": 100.19047546386719,
+      "pageX": 168.38095092773438,
+      "pageY": 225.14285278320312,
+      "target": 707,
+      "timestamp": 260247809,
+      "touches": []
+    },
+    "target": {
+      "_children": [],
+      "_internalFiberInstanceHandleDEV": "[FiberNode]",
+      "_nativeTag": 707,
+      "viewConfig": {}
+    },
+    "timeStamp": 1718462510841,
+    "touchHistory": {
+      "indexOfSingleActiveTouch": 0,
+      "mostRecentTimeStamp": 260247809,
+      "numberActiveTouches": 0,
+      "touchBank": []
+    },
+    "type": null
+  },
+  {
+    "_dispatchInstances": {
+      "_debugHookTypes": null,
+      "_debugID": 2689,
+      "_debugIsCurrentlyTiming": false,
+      "_debugNeedsRemount": false,
+      "_debugOwner": "[FiberNode]",
+      "_debugSource": {},
+      "actualDuration": 0,
+      "actualStartTime": 661,
+      "alternate": null,
+      "child": "[FiberNode]",
+      "childExpirationTime": 0,
+      "dependencies": null,
+      "effectTag": 0,
+      "elementType": "RCTText",
+      "expirationTime": 0,
+      "firstEffect": null,
+      "index": 0,
+      "key": null,
+      "lastEffect": null,
+      "memoizedProps": {},
+      "memoizedState": null,
+      "mode": 8,
+      "nextEffect": null,
+      "pendingProps": {},
+      "ref": null,
+      "return": "[FiberNode]",
+      "selfBaseDuration": 0,
+      "sibling": null,
+      "stateNode": "[ReactNativeFiberHostComponent]",
+      "tag": 5,
+      "treeBaseDuration": 0,
+      "type": "RCTText",
+      "updateQueue": null
+    },
+    "_dispatchListeners": "[Function onResponderRelease]",
+    "_targetInst": {
+      "_debugHookTypes": null,
+      "_debugID": 2689,
+      "_debugIsCurrentlyTiming": false,
+      "_debugNeedsRemount": false,
+      "_debugOwner": "[FiberNode]",
+      "_debugSource": {},
+      "actualDuration": 0,
+      "actualStartTime": 661,
+      "alternate": null,
+      "child": "[FiberNode]",
+      "childExpirationTime": 0,
+      "dependencies": null,
+      "effectTag": 0,
+      "elementType": "RCTText",
+      "expirationTime": 0,
+      "firstEffect": null,
+      "index": 0,
+      "key": null,
+      "lastEffect": null,
+      "memoizedProps": {},
+      "memoizedState": null,
+      "mode": 8,
+      "nextEffect": null,
+      "pendingProps": {},
+      "ref": null,
+      "return": "[FiberNode]",
+      "selfBaseDuration": 0,
+      "sibling": null,
+      "stateNode": "[ReactNativeFiberHostComponent]",
+      "tag": 5,
+      "treeBaseDuration": 0,
+      "type": "RCTText",
+      "updateQueue": null
+    },
+    "bubbles": null,
+    "cancelable": null,
+    "currentTarget": null,
+    "defaultPrevented": null,
+    "dispatchConfig": {
+      "dependencies": [],
+      "registrationName": "onResponderRelease"
+    },
+    "eventPhase": null,
+    "isDefaultPrevented": "[Function functionThatReturnsFalse]",
+    "isPropagationStopped": "[Function functionThatReturnsFalse]",
+    "isTrusted": null,
+    "nativeEvent": {
+      "changedTouches": [],
+      "identifier": 0,
+      "locationX": 59.80952453613281,
+      "locationY": 100.19047546386719,
+      "pageX": 168.38095092773438,
+      "pageY": 225.14285278320312,
+      "target": 707,
+      "timestamp": 260247809,
+      "touches": []
+    },
+    "target": {
+      "_children": [],
+      "_internalFiberInstanceHandleDEV": "[FiberNode]",
+      "_nativeTag": 707,
+      "viewConfig": {}
+    },
+    "timeStamp": 1718462510841,
+    "touchHistory": {
+      "indexOfSingleActiveTouch": 0,
+      "mostRecentTimeStamp": 260247809,
+      "numberActiveTouches": 0,
+      "touchBank": []
+    },
+    "type": null
+  }
+]
+
+```
+
+_targetInst中的elementType不同
+
+
+
+往以下日志打印：
+
+```javascript
+var ResponderEventPlugin = {
+  /* For unit testing only */
+  _getResponder: function () {
+    return responderInst;
+  },
+  eventTypes: eventTypes,
+
+  /**
+   * We must be resilient to `targetInst` being `null` on `touchMove` or
+   * `touchEnd`. On certain platforms, this means that a native scroll has
+   * assumed control and the original touch targets are destroyed.
+   */
+  extractEvents: function (
+    topLevelType,
+    targetInst,
+    nativeEvent,
+    nativeEventTarget,
+    eventSystemFlags
+  ) {
+    console.log(`new topLevelType: ${topLevelType}, nativeEvent:`, nativeEvent);
+    if (isStartish(topLevelType)) {
+      console.log(`isStartish true`);
+      console.log(`isStartish true, targetInst elementTypes:`, targetInst.elementType);
+      trackedTouchCount += 1;
+    } else if (isEndish(topLevelType)) {
+      console.log(`isEndish true trackedTouchCount: ${trackedTouchCount}`);
+      if (trackedTouchCount >= 0) {
+        trackedTouchCount -= 1;
+      } else {
+        {
+          warn(
+            "Ended a touch event which was not counted in `trackedTouchCount`."
+          );
+        }
+
+        return null;
+      }
+        
+     //第二步
+    var extracted = canTriggerTransfer(topLevelType, targetInst, nativeEvent)
+      ? setResponderAndExtractTransfer(
+        topLevelType,
+        targetInst,
+        nativeEvent,
+        nativeEventTarget
+      )
+      : null;
+
+       console.log(`incrementalTouch ${incrementalTouch}`);
+        if (incrementalTouch) {
+          var gesture = ResponderSyntheticEvent.getPooled(
+            incrementalTouch,
+            responderInst,
+            nativeEvent,
+            nativeEventTarget
+          );
+          console.log(`incrementalTouch accumulateDirectDispatches before gesture`);
+          extractAndPrintElementType("before gesture", gesture);
+          gesture.touchHistory = ResponderTouchHistoryStore.touchHistory;
+          accumulateDirectDispatches(gesture);
+          console.log(`incrementalTouch accumulateDirectDispatches end gesture`);
+          extractAndPrintElementType("end gesture", gesture);
+
+
+          console.log(`incrementalTouch before extracted :`);
+          extractAndPrintElementType("before extracted", extracted);
+          extracted = accumulate(extracted, gesture);
+          console.log(`incrementalTouch end extracted :`);
+          extractAndPrintElementType("end extracted", extracted);
+        }
+        
+        if (finalTouch) {
+          var finalEvent = ResponderSyntheticEvent.getPooled(
+            finalTouch,
+            responderInst,
+            nativeEvent,
+            nativeEventTarget
+          );
+          finalEvent.touchHistory = ResponderTouchHistoryStore.touchHistory;
+          accumulateDirectDispatches(finalEvent);
+          extracted = accumulate(extracted, finalEvent);
+           //打印最终的elementType
+          console.log(`extracted _targetInst.elementType:`, extracted[0]._targetInst.elementType);
+          changeResponder(null);
+        }
+    } 
+        
+        
+  }
+    
+    function extractAndPrintElementType(tag, extracted) {
+      if (extracted == null) {
+        console.log(`${tag} extracted is null`);
+        return;
+      }
+      if (Array.isArray(extracted)) {
+        // 如果是数组，遍历每个对象并打印 elementType 的值
+        extracted.forEach(item => {
+          if (item && item.elementType) {
+            console.log(`${tag} elementType:`, item.elementType);
+          }
+        });
+      } else if (typeof extracted === 'object') {
+        // 如果是对象，遍历对象的所有属性值并打印 elementType 的值
+        Object.values(extracted).forEach(item => {
+          if (item && item.elementType) {
+            console.log(`${tag} elementType:`, item.elementType);
+          }
+        });
+      } else {
+        console.error('Invalid input. Expected an object or an array.');
+      }
+    }
+
+
+function setResponderAndExtractTransfer(
+  topLevelType,
+  targetInst,
+  nativeEvent,
+  nativeEventTarget
+) {
+   if (responderInst) {
+        if (shouldSwitch) {
+          console.log(`wantsResponderInst shouldSwitch: ${shouldSwitch}`);
+          //...省略代码
+        } 
+      } else {
+         //无嵌套情况走的分支
+        console.log(`wantsResponderInst responderInst: is null`);
+        extracted = accumulate(extracted, grantEvent);
+        changeResponder(wantsResponderInst, blockHostResponder);
+      }
+
+      return extracted;
+    } 
+  }
+
+```
+
+
+
+
+
+异常日志：
+
+```shell
+[Sun Jun 16 2024 11:19:11.800]  LOG      new topLevelType: topTouchStart, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 99.42857360839844, "locationY": 88, "pageX": 228.57142639160156, "pageY": 507.80950927734375, "target": 707, "timestamp": 271427931, "touches": [[Circular]]}
+[Sun Jun 16 2024 11:19:11.129]  LOG      isStartish true
+[Sun Jun 16 2024 11:19:11.129]  LOG      isStartish true, targetInst elementTypes: RCTText
+[Sun Jun 16 2024 11:19:11.130]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sun Jun 16 2024 11:19:11.130]  LOG      skipOverBubbleShouldSetFrom: false
+[Sun Jun 16 2024 11:19:11.130]  LOG      wantsResponderInst responderInst: is null
+[Sun Jun 16 2024 11:19:11.130]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:19:11.131]  LOG      incrementalTouch : {"dependencies": ["topTouchStart"], "registrationName": "onResponderStart"}
+[Sun Jun 16 2024 11:19:11.131]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:19:11.131]  LOG      before gesture elementType: RCTText
+[Sun Jun 16 2024 11:19:11.131]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:19:11.131]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:19:11.132]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:19:11.132]  LOG      before extracted elementType: RCTText
+[Sun Jun 16 2024 11:19:11.164]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:19:11.165]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+        
+[Sun Jun 16 2024 11:19:11.165]  LOG      new topLevelType: topTouchStart, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 99.42857360839844, "locationY": 88, "pageX": 208, "pageY": 212.95237731933594, "target": 707, "timestamp": 271427951, "touches": [[Circular]]}
+[Sun Jun 16 2024 11:19:11.165]  LOG      isStartish true
+[Sun Jun 16 2024 11:19:11.166]  LOG      isStartish true, targetInst elementTypes: RCTText
+[Sun Jun 16 2024 11:19:11.166]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sun Jun 16 2024 11:19:11.166]  LOG      skipOverBubbleShouldSetFrom: true
+[Sun Jun 16 2024 11:19:11.166]  LOG      wantsResponderInst shouldSwitch: true
+[Sun Jun 16 2024 11:19:11.167]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:19:11.167]  LOG      incrementalTouch : {"dependencies": ["topTouchStart"], "registrationName": "onResponderStart"}
+[Sun Jun 16 2024 11:19:11.167]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:19:11.167]  LOG      before gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.168]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:19:11.168]  LOG      end gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.168]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:19:11.168]  LOG      accumulate curent isArray concat next
+[Sun Jun 16 2024 11:19:11.168]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:19:11.169]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+        
+        
+[Sun Jun 16 2024 11:19:11.183]  LOG      new topLevelType: topTouchMove, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 99.42857360839844, "locationY": 88, "pageX": 208, "pageY": 212.95237731933594, "target": 707, "timestamp": 271427975, "touches": [[Circular]]}
+[Sun Jun 16 2024 11:19:11.183]  LOG      setResponderAndExtractTransfer: topTouchMove
+[Sun Jun 16 2024 11:19:11.183]  LOG      skipOverBubbleShouldSetFrom: true
+[Sun Jun 16 2024 11:19:11.184]  LOG      incrementalTouch : {"dependencies": ["topTouchMove"], "registrationName": "onResponderMove"}
+[Sun Jun 16 2024 11:19:11.184]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:19:11.184]  LOG      before gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.184]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:19:11.185]  LOG      end gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.185]  LOG      end gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.185]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:19:11.185]  LOG      before extracted extracted is null
+[Sun Jun 16 2024 11:19:11.186]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:19:11.186]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:19:11.186]  LOG      end extracted elementType: RCTView
+[Sun Jun 16 2024 11:19:11.186]  LOG      end extracted elementType: RCTView
+[Sun Jun 16 2024 11:19:11.187]  LOG      isResponderTerminate： false，
+        finalTouch： null
+        
+        
+        
+[Sun Jun 16 2024 11:19:11.195]  LOG      new topLevelType: topTouchEnd, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 99.42857360839844, "locationY": 88, "pageX": 228.57142639160156, "pageY": 507.80950927734375, "target": 707, "timestamp": 271427984, "touches": []}
+[Sun Jun 16 2024 11:19:11.195]  LOG      isEndish true trackedTouchCount: 2
+[Sun Jun 16 2024 11:19:11.196]  LOG      incrementalTouch : {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderEnd"}
+[Sun Jun 16 2024 11:19:11.196]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:19:11.196]  LOG      before gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.196]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:19:11.197]  LOG      end gesture elementType: RCTView
+[Sun Jun 16 2024 11:19:11.197]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:19:11.197]  LOG      before extracted extracted is null
+[Sun Jun 16 2024 11:19:11.197]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:19:11.197]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:19:11.201]  LOG      end extracted elementType: RCTView
+[Sun Jun 16 2024 11:19:11.201]  LOG      isResponderTerminate： false，
+        finalTouch： {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderRelease"}
+[Sun Jun 16 2024 11:19:11.202]  LOG      finalTouch extracted _targetInst.elementType: RCTView
+
+
+
+
+[Sun Jun 16 2024 11:19:11.304]  LOG      new topLevelType: topTouchEnd, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 99.42857360839844, "locationY": 88, "pageX": 208, "pageY": 212.95237731933594, "target": 707, "timestamp": 271427991, "touches": []}
+[Sun Jun 16 2024 11:19:11.304]  LOG      isEndish true trackedTouchCount: 1
+[Sun Jun 16 2024 11:19:11.305]  LOG      incrementalTouch : null
+[Sun Jun 16 2024 11:19:11.305]  LOG      isResponderTerminate： null，
+        finalTouch： null
+```
+
+
+
+正常日志：
+
+```javascript
+[Sun Jun 16 2024 11:22:45.635]  LOG      new topLevelType: topTouchStart, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 100.19047546386719, "locationY": 73.9047622680664, "pageX": 229.3333282470703, "pageY": 398.0952453613281, "target": 707, "timestamp": 271642539, "touches": [[Circular]]}
+[Sun Jun 16 2024 11:22:45.647]  LOG      isStartish true
+[Sun Jun 16 2024 11:22:45.647]  LOG      isStartish true, targetInst elementTypes: RCTText
+[Sun Jun 16 2024 11:22:45.648]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sun Jun 16 2024 11:22:45.648]  LOG      skipOverBubbleShouldSetFrom: false
+[Sun Jun 16 2024 11:22:45.648]  LOG      wantsResponderInst responderInst: is null
+[Sun Jun 16 2024 11:22:45.648]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:22:45.648]  LOG      incrementalTouch : {"dependencies": ["topTouchStart"], "registrationName": "onResponderStart"}
+[Sun Jun 16 2024 11:22:45.649]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:22:45.649]  LOG      before gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.649]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:22:45.650]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.650]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:22:45.650]  LOG      before extracted elementType: RCTText
+[Sun Jun 16 2024 11:22:45.650]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:22:45.651]  LOG      isResponderTerminate： false，
+        finalTouch： null
+
+
+
+[Sun Jun 16 2024 11:22:45.651]  LOG      new topLevelType: topTouchCancel, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 100.19047546386719, "locationY": 73.9047622680664, "pageX": 208.76190185546875, "pageY": 198.85714721679688, "target": 707, "timestamp": 271642544, "touches": []}
+[Sun Jun 16 2024 11:22:45.651]  LOG      isEndish true trackedTouchCount: 1
+[Sun Jun 16 2024 11:22:45.651]  LOG      incrementalTouch : {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderEnd"}
+[Sun Jun 16 2024 11:22:45.651]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:22:45.652]  LOG      before gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.652]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:22:45.665]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.665]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:22:45.665]  LOG      before extracted extracted is null
+[Sun Jun 16 2024 11:22:45.665]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:22:45.666]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:22:45.666]  LOG      end extracted elementType: RCTText
+[Sun Jun 16 2024 11:22:45.666]  LOG      isResponderTerminate： true，
+        finalTouch： {"dependencies": [], "registrationName": "onResponderTerminate"}
+[Sun Jun 16 2024 11:22:45.666]  LOG      finalTouch extracted _targetInst.elementType: RCTText
+
+
+
+
+[Sun Jun 16 2024 11:22:45.667]  LOG      new topLevelType: topTouchStart, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 100.19047546386719, "locationY": 73.9047622680664, "pageX": 208.76190185546875, "pageY": 198.85714721679688, "target": 707, "timestamp": 271642561, "touches": [[Circular]]}
+[Sun Jun 16 2024 11:22:45.667]  LOG      isStartish true
+[Sun Jun 16 2024 11:22:45.667]  LOG      isStartish true, targetInst elementTypes: RCTText
+[Sun Jun 16 2024 11:22:45.667]  LOG      setResponderAndExtractTransfer: topTouchStart
+[Sun Jun 16 2024 11:22:45.667]  LOG      skipOverBubbleShouldSetFrom: false
+[Sun Jun 16 2024 11:22:45.671]  LOG      wantsResponderInst responderInst: is null
+[Sun Jun 16 2024 11:22:45.671]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:22:45.671]  LOG      incrementalTouch : {"dependencies": ["topTouchStart"], "registrationName": "onResponderStart"}
+[Sun Jun 16 2024 11:22:45.672]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:22:45.679]  LOG      before gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.679]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:22:45.679]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.679]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:22:45.680]  LOG      before extracted elementType: RCTText
+[Sun Jun 16 2024 11:22:45.680]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:22:45.681]  LOG      isResponderTerminate： false，
+        finalTouch： null
+
+
+
+
+[Sun Jun 16 2024 11:22:45.681]  LOG      new topLevelType: topTouchMove, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 100.19047546386719, "locationY": 73.9047622680664, "pageX": 208.76190185546875, "pageY": 198.85714721679688, "target": 707, "timestamp": 271642574, "touches": [[Circular]]}
+[Sun Jun 16 2024 11:22:45.681]  LOG      setResponderAndExtractTransfer: topTouchMove
+[Sun Jun 16 2024 11:22:45.681]  LOG      skipOverBubbleShouldSetFrom: true
+[Sun Jun 16 2024 11:22:45.682]  LOG      incrementalTouch : {"dependencies": ["topTouchMove"], "registrationName": "onResponderMove"}
+[Sun Jun 16 2024 11:22:45.682]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:22:45.682]  LOG      before gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.682]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:22:45.683]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.683]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.683]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:22:45.683]  LOG      before extracted extracted is null
+[Sun Jun 16 2024 11:22:45.684]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:22:45.684]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:22:45.684]  LOG      end extracted elementType: RCTText
+[Sun Jun 16 2024 11:22:45.684]  LOG      end extracted elementType: RCTText
+[Sun Jun 16 2024 11:22:45.685]  LOG      isResponderTerminate： false，
+        finalTouch： null
+
+
+
+[Sun Jun 16 2024 11:22:45.685]  LOG      new topLevelType: topTouchEnd, nativeEvent: {"changedTouches": [[Circular]], "identifier": 0, "locationX": 100.19047546386719, "locationY": 73.9047622680664, "pageX": 208.76190185546875, "pageY": 198.85714721679688, "target": 707, "timestamp": 271642578, "touches": []}
+[Sun Jun 16 2024 11:22:45.685]  LOG      isEndish true trackedTouchCount: 1
+[Sun Jun 16 2024 11:22:45.685]  LOG      incrementalTouch : {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderEnd"}
+[Sun Jun 16 2024 11:22:45.835]  LOG      incrementalTouch accumulateDirectDispatches before gesture
+[Sun Jun 16 2024 11:22:45.836]  LOG      before gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.836]  LOG      incrementalTouch accumulateDirectDispatches end gesture
+[Sun Jun 16 2024 11:22:45.836]  LOG      end gesture elementType: RCTText
+[Sun Jun 16 2024 11:22:45.837]  LOG      incrementalTouch before extracted :
+[Sun Jun 16 2024 11:22:45.837]  LOG      before extracted extracted is null
+[Sun Jun 16 2024 11:22:45.837]  LOG      accumulate curent is null, retuern  next
+[Sun Jun 16 2024 11:22:45.837]  LOG      incrementalTouch end extracted :
+[Sun Jun 16 2024 11:22:45.838]  LOG      end extracted elementType: RCTText
+[Sun Jun 16 2024 11:22:45.838]  LOG      isResponderTerminate： false，
+        finalTouch： {"dependencies": ["topTouchCancel", "topTouchEnd"], "registrationName": "onResponderRelease"}
+[Sun Jun 16 2024 11:22:45.838]  LOG      finalTouch extracted _targetInst.elementType: RCTText
+
+```
+
+可以看到失败的核心原因是：
+
+两次的topTouchStart事件，造成了点击事件响应对象的切换
+
+想办法不让该中情况switch可解决问题
+
+```javascript
+function setResponderAndExtractTransfer(
+  topLevelType,
+  targetInst,
+  nativeEvent,
+  nativeEventTarget
+) {
+   if (responderInst) {
+        if (shouldSwitch) {
+          console.log(`wantsResponderInst shouldSwitch: ${shouldSwitch}`);
+          //提前return
+          return
+          //忽略代码
+        } 
+      } else {
+         //去嵌套情况走的分支
+        console.log(`wantsResponderInst responderInst: is null`);
+        extracted = accumulate(extracted, grantEvent);
+        changeResponder(wantsResponderInst, blockHostResponder);
+      }
+
+      return extracted;
+    } 
+  }
+```
+
+
+
+native解法：
+
+```java
+ReactRootView reactRootView = new ReactRootView(context) {
+  @Override
+  public boolean onInterceptTouchEvent(MotionEvent ev) {
+    if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+      ViewParent parent = getParent();
+      while (parent != null) {
+        if (parent instanceof RootView) {
+          break;
+        }
+        parent = parent.getParent();
+      }
+      if (parent != null && parent instanceof RootView) {
+        Log.d("Awille", "disable parent dispatch");
+        ((RootView) parent).onChildStartedNativeGesture(ev);
+      }
+    }
+    return super.onInterceptTouchEvent(ev);
+  }
+};
+```
+
+
+
+
+
 
 
 ##  附录
@@ -853,7 +1789,7 @@ var ResponderEventPlugin = {
 
 
 
-
+IntegrationTestsApp
 
 ### ReactCompoundView
 

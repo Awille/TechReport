@@ -88,6 +88,14 @@ npx react-native bundle --platform android --dev false --entry-file index.js --b
 
 
 
+### JS框架代码Debug
+
+以Libraries/Renderer/implementations/ReactNativeRenderer-dev.js为例
+
+console.log的输出在浏览器里面
+
+
+
 
 
 其他错误参考：
