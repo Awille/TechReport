@@ -1,5 +1,9 @@
 # ReactNative事件分发
 
+[TOC]
+
+
+
 ## 1、Androd Java层事件传递
 
 ReactAndroid\src\main\java\com\facebook\react\ReactRootView.java
@@ -376,6 +380,10 @@ public interface ReactZIndexedViewGroup {
 
 ## 2、Android C层的事件向JS传递
 
+https://github.com/sucese/react-native/blob/master/doc/ReactNative%E6%BA%90%E7%A0%81%E7%AF%87/6ReactNative%E6%BA%90%E7%A0%81%E7%AF%87%EF%BC%9A%E9%80%9A%E4%BF%A1%E6%9C%BA%E5%88%B6.md
+
+
+
 在C层其实做的事情很简单，核心就是把Android Java层处理好的触摸事件坐标，ReactTag分发到JS层
 
 核心就是EventDispatcher.dispatchEvent
@@ -706,9 +714,91 @@ class RCTDeviceEventEmitter extends EventEmitter {
 
 
 
+ReactAndroid/src/main/java/com/facebook/react/bridge/CatalystInstanceImpl.java
+
+```java
+void call(CatalystInstanceImpl catalystInstance) {
+  NativeArray arguments = mArguments != null ? mArguments : new WritableNativeArray();
+  catalystInstance.jniCallJSFunction(mModule, mMethod, arguments);
+}
+```
+
+以点击事件为例：、
+
+mModule = "RCTEventEmitter"
+
+mMethod = “receiveTouches”
+
+argument为writableArray: 
+["topTouchStart",[{"identifier":0,"timestamp":513046596,"target":93,"locationY":10.285714149475098,"locationX":210.6666717529297,"pageY":287.23809814453125,"pageX":239.23809814453125}],[0]]
+
+
+
+JS注册入口为：
+Libraries\Renderer\implementations\ReactNativeRenderer-dev.js
+
+```javascript
+ReactNativePrivateInterface.RCTEventEmitter.register({
+  receiveEvent: receiveEvent,
+  receiveTouches: receiveTouches
+});
+```
+
+Libraries\ReactPrivate\ReactNativePrivateInterface.js
+
+```javascript
+  get RCTEventEmitter(): RCTEventEmitter {
+    return require('../EventEmitter/RCTEventEmitter');
+  },
+```
+
+Libraries\EventEmitter\RCTEventEmitter.js
+
+```javascript
+'use strict';
+
+const BatchedBridge = require('../BatchedBridge/BatchedBridge');
+
+const RCTEventEmitter = {
+  register(eventEmitter: any) {
+    BatchedBridge.registerCallableModule('RCTEventEmitter', eventEmitter);
+  },
+};
+
+module.exports = RCTEventEmitter;
+```
+
+
+
+Libraries\BatchedBridge\BatchedBridge.js
+
+```javascript
+'use strict';
+
+const MessageQueue = require('./MessageQueue');
+
+const BatchedBridge: MessageQueue = new MessageQueue();
+
+// Wire up the batched bridge on the global object so that we can call into it.
+// Ideally, this would be the inverse relationship. I.e. the native environment
+// provides this global directly with its script embedded. Then this module
+// would export it. A possible fix would be to trim the dependencies in
+// MessageQueue to its minimal features and embed that in the native runtime.
+
+Object.defineProperty(global, '__fbBatchedBridge', {
+  configurable: true,
+  value: BatchedBridge,
+});
+
+module.exports = BatchedBridge;
+
+```
+
+
+
 ## JavaScript中对点击事件的处理
 
-具体参照
+具体参照: 从注册开始：
 
 Libraries/Renderer/implementations/ReactNativeRenderer-dev.js
 
