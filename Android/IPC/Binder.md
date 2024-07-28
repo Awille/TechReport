@@ -43,6 +43,10 @@ http://www.wowotech.net/linux_kenrel/binder1.html
 
 
 
+https://gityuan.com/2015/11/01/binder-driver/
+
+
+
 
 
 
