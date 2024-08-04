@@ -47,7 +47,110 @@ https://gityuan.com/2015/11/01/binder-driver/
 
 
 
+wsl：
 
+https://blog.csdn.net/feinifi/article/details/129572652
+
+
+
+## 3、Binder初始化
+
+### 3.1、数据结构
+
+binder_alloc.c中持有了一个struct list_lru binder_freelist数据结构
+
+类型为list_lru 
+
+```c
+struct list_lru {
+	struct list_lru_node	*node;
+#ifdef CONFIG_MEMCG
+	struct list_head	list;
+	int			shrinker_id;
+	bool			memcg_aware;
+	struct xarray		xa;
+#endif
+};
+
+struct list_head {
+	struct list_head *next, *prev;
+};
+
+struct list_lru_node {
+	/* 自旋锁 protects all lists on the node, including per cgroup */
+	spinlock_t		lock;
+	/* global list, used for the root cgroup in cgroup aware lrus */
+	struct list_lru_one	lru;
+	long			nr_items;
+} ____cacheline_aligned_in_smp;
+```
+
+初始化binder内存回收
+
+drivers\android\binder_alloc.c
+
+```c
+int binder_alloc_shrinker_init(void)
+{
+	int ret;
+
+	ret = list_lru_init(&binder_freelist);
+	if (ret)
+		return ret;
+
+	binder_shrinker = shrinker_alloc(0, "android-binder");
+	if (!binder_shrinker) {
+		list_lru_destroy(&binder_freelist);
+		return -ENOMEM;
+	}
+
+	binder_shrinker->count_objects = binder_shrink_count;
+	binder_shrinker->scan_objects = binder_shrink_scan;
+
+	shrinker_register(binder_shrinker);
+
+	return 0;
+}
+```
+
+include\linux\list_lru.h
+
+```c
+#define list_lru_init(lru)				\
+	__list_lru_init((lru), false, NULL, NULL)
+
+int __list_lru_init(struct list_lru *lru, bool memcg_aware,
+		    struct lock_class_key *key, struct shrinker *shrinker)
+{
+	int i;
+
+#ifdef CONFIG_MEMCG
+	if (shrinker)
+		lru->shrinker_id = shrinker->id;
+	else
+		lru->shrinker_id = -1;
+
+	if (mem_cgroup_kmem_disabled())
+		memcg_aware = false;
+#endif
+
+	lru->node = kcalloc(nr_node_ids, sizeof(*lru->node), GFP_KERNEL);
+	if (!lru->node)
+		return -ENOMEM;
+
+	for_each_node(i) {
+		spin_lock_init(&lru->node[i].lock);
+		if (key)
+			lockdep_set_class(&lru->node[i].lock, key);
+		init_one_lru(&lru->node[i].lru);
+	}
+
+	memcg_init_list_lru(lru, memcg_aware);
+	list_lru_register(lru);
+
+	return 0;
+}
+```
 
 
 
@@ -142,7 +245,113 @@ basic
 
 
 
+Linux内存管理API
 
+https://deepinout.com/linux-kernel-api/linux-kernel-api-memory-management/linux-kernel-api-kmalloc.html
+
+
+
+WSL源码版本：
+https://github.com/microsoft/WSL2-Linux-Kernel/releases/tag/linux-msft-wsl-5.15.153.1
+
+
+
+bison
+
+dwarves
+
+
+
+**Bison**：
+Bison是一个自由的生成器，用于解析器的开发。它是GNU Project的一部分，用于生成LALR(1)或LR(1)解析器。Bison读取一个描述语法的文件，然后生成一个对应的解析器程序。在编译器和解释器的开发中，Bison经常与Lex（词法分析器生成器）一起使用，用于构建语法分析器。
+
+Bison的主要作用是根据给定的文法规则生成解析器代码。它将输入的语法规则转换为解析器程序，这个解析器程序可以识别和解释符合该语法规则的输入。
+
+**Dwarves**：
+Dwarves是一个工具集合，用于处理和分析程序的调试信息（debugging information）。这些调试信息包含了关于程序中变量、函数、数据结构等信息的元数据。Dwarves提供了一组工具，用于提取、显示和处理这些调试信息，以帮助开发人员调试程序、分析内存映像等。
+
+Dwarves工具集包括一些常用的命令行工具，如`dwarfdump`（用于显示调试信息的内容）、`dwarfls`（用于列出调试信息文件中的内容）等。这些工具有助于开发人员在调试和分析程序时更好地理解程序的结构和运行时信息。
+
+总的来说，Bison用于生成解析器代码，而Dwarves用于处理和分析程序的调试信息，这两个工具在软件开发中扮演着不同但重要的角色。
+
+
+
+在Linux中安装Bison和Dwarves这两个工具，您可以通过包管理器来进行安装。以下是在常见的Debian/Ubuntu和CentOS/RHEL系统上安装这两个工具的方法：
+
+### 安装Bison
+
+#### Debian/Ubuntu系统
+
+bash
+
+复制
+
+```
+sudo apt update
+sudo apt install bison
+```
+
+#### CentOS/RHEL系统
+
+bash
+
+复制
+
+```
+sudo yum install bison
+```
+
+### 安装Dwarves
+
+#### Debian/Ubuntu系统
+
+Dwarves工具可能包含在`elfutils`包中，您可以通过安装`elfutils`来获取Dwarves工具。
+
+bash
+
+复制
+
+```
+sudo apt update
+sudo apt install elfutils
+```
+
+#### CentOS/RHEL系统
+
+bash
+
+复制
+
+```
+sudo yum install elfutils
+```
+
+安装完成后，您就可以在系统上使用Bison和Dwarves这两个工具了。如果您需要更详细的信息或遇到任何问题，请随时告诉我。
+
+
+
+
+
+WSL 头文件编译内核模块 头文件缺失问题
+
+https://blog.csdn.net/helaisun/article/details/128426641
+
+https://roderickchan.github.io/zh-cn/2022-11-28-wsl%E4%BD%BF%E7%94%A8%E9%97%AE%E9%A2%98%E8%AE%B0%E5%BD%95/
+
+替换linux内核：
+https://blog.csdn.net/m0_59339540/article/details/138974581
+
+
+
+  OBJCOPY arch/x86/boot/setup.bin
+  BUILD   arch/x86/boot/bzImage
+Kernel: arch/x86/boot/bzImage is ready  (#4)
+
+/home/linuxkernel/WSL2-Linux-Kernel-linux-msft-wsl-5.15.153.1/arch/x86/boot/bzImage  /mnt/e/UbuntuWSL
+
+/mnt/e/OsTestCode/kernalHello/hello.c   /kernelstudy
+
+/mnt/e/OsTestCode/kernalHello/Makefile  /kernelstudy
 
 
 
