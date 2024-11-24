@@ -847,6 +847,8 @@ void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool fu
 }
 ```
 
+
+
 可以看到RootRenderNode触发各个子View的prepareTreeImpl，是一个递归的写法
 
 prepareListAndChildren
@@ -906,6 +908,82 @@ bool SkiaDisplayList::prepareListAndChildren(
         }
     }
     return isDirty;
+}
+```
+
+
+
+
+
+这里没有明显看到脏区域渲染，我们说道prepareListAndChildren会调用每个子View的prepareTreeImpl
+
+假设走到我们invalidate的View.prepareTreeImpl中：
+
+```c++
+//libs\hwui\RenderNode.cpp
+/**
+ * Traverse down the the draw tree to prepare for a frame.
+ * MODE_FULL = UI Thread-driven (thus properties must be synced), otherwise RT driven
+ * While traversing down the tree, functorsNeedLayer flag is set to true if anything that uses the stencil buffer may be needed. Views that use a functor to draw will be forced onto a layer.
+ */
+//rootRenderNode触发的流程
+void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+    info.damageAccumulator->pushTransform(this);
+
+    if (info.mode == TreeInfo::MODE_FULL) {
+        //更新StagingProperties
+        pushStagingPropertiesChanges(info);
+    }
+    bool willHaveFunctor = false;
+    if (info.mode == TreeInfo::MODE_FULL && mStagingDisplayList) {
+        willHaveFunctor = mStagingDisplayList->hasFunctor();
+    } else if (mDisplayList) {
+        willHaveFunctor = mDisplayList->hasFunctor();
+    }
+    prepareLayer(info, animatorDirtyMask);
+    if (info.mode == TreeInfo::MODE_FULL) {
+        //rootRenderNode更新
+        pushStagingDisplayListChanges(observer, info);
+    }
+	//调用子view的prepareTreeImpl判断是否有脏区域的过程，假设没有子view可以先忽略
+    pushLayerUpdate(info);
+    info.damageAccumulator->popTransform();
+}
+```
+
+核心看到
+pushStagingDisplayListChanges(observer, info);
+
+```c++
+//libs\hwui\RenderNode.cpp
+void RenderNode::pushStagingDisplayListChanges(TreeObserver& observer, TreeInfo& info) {
+    if (mNeedsDisplayListSync) {
+        mNeedsDisplayListSync = false;
+        // Damage with the old display list first then the new one to catch any
+        // changes in isRenderable or, in the future, bounds
+        (info);
+        syncDisplayList(observer, &info);
+        damageSelf(info);
+    }
+}
+```
+
+这里直接回执行damageSelf
+
+```c++
+//libs\hwui\RenderNode.cpp
+void RenderNode::damageSelf(TreeInfo& info) {
+    if (isRenderable()) {
+        mDamageGenerationId = info.damageGenerationId;
+        if (properties().getClipDamageToBounds()) {
+            info.damageAccumulator->dirty(0, 0, properties().getWidth(), properties().getHeight());
+        } else {
+            //如果被设置了clipChildren=false，则会将脏区域标记为最大值
+            // Hope this is big enough?
+            // TODO: Get this from the display list ops or something
+            info.damageAccumulator->dirty(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
+        }
+    }
 }
 ```
 
