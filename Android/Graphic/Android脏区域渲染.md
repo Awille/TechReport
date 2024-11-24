@@ -348,6 +348,7 @@ private void recreateChildDisplayList(View child) {
 回到View.updateDisplayListIfDirty()
 
 ```java
+//core\java\android\view\View.java
 public RenderNode updateDisplayListIfDirty() {
     if ((mPrivateFlags & PFLAG_DRAWING_CACHE_VALID) == 0
             || !renderNode.hasDisplayList()
@@ -394,13 +395,517 @@ public RenderNode updateDisplayListIfDirty() {
 }
 ```
 
-先看 renderNode.beginRecording实际是获取了RecordingCanvas对象
+先看 renderNode.beginRecording实际是获取了RecordingCanvas对象, RecordingCanvas对应native层的SkiaRecordingCanvas。
+
+View.updateDisplayListIfDirty()具体做的事情可以总结为
+
+* 获取RecordingCanvas，对应native层为SkiaRecordingCanvas
+* 调用View的draw方法，实际是王SkiaRecordingCanvas中去更新DisplayListData
+* 调用renderNode.endRecording通知view的绘制结束
+
+```java
+//core\java\android\view\View.java
+@CallSuper
+public void draw(Canvas canvas) {
+    final int privateFlags = mPrivateFlags;
+    //当前View新增PFLAG_DRAWN标志位
+    mPrivateFlags = (privateFlags & ~PFLAG_DIRTY_MASK) | PFLAG_DRAWN;
+
+    /*
+     * Draw traversal performs several drawing steps which must be executed
+     * in the appropriate order:
+     *
+     *      1. Draw the background
+     *      2. If necessary, save the canvas' layers to prepare for fading
+     *      3. Draw view's content
+     *      4. Draw children
+     *      5. If necessary, draw the fading edges and restore layers
+     *      6. Draw decorations (scrollbars for instance)
+     */
+
+    // Step 1, draw the background, if needed
+    int saveCount;
+	//绘制背景
+    drawBackground(canvas);
+
+    // skip step 2 & 5 if possible (common case)
+    final int viewFlags = mViewFlags;
+    //横向边缘渐隐效果，对应接口为setVerticalFadingEdgeEnabled
+    boolean horizontalEdges = (viewFlags & FADING_EDGE_HORIZONTAL) != 0;
+    boolean verticalEdges = (viewFlags & FADING_EDGE_VERTICAL) != 0;
+    if (!verticalEdges && !horizontalEdges) {
+        //大部分的case都是走这个分支，处分设置setVerticalFadingEdgeEnabled(true)
+        //或者setHorizontalFadingEdgeEnabled(true)
+        // Step 3, draw the content
+        onDraw(canvas);
+
+        // Step 4, draw the children
+        dispatchDraw(canvas);
+
+        drawAutofilledHighlight(canvas);
+
+        // Overlay is part of the content and draws beneath Foreground
+        if (mOverlay != null && !mOverlay.isEmpty()) {
+            mOverlay.getOverlayView().dispatchDraw(canvas);
+        }
+
+        // Step 6, draw decorations (foreground, scrollbars)
+        onDrawForeground(canvas);
+
+        // Step 7, draw the default focus highlight
+        drawDefaultFocusHighlight(canvas);
+
+        if (debugDraw()) {
+            debugDrawFocus(canvas);
+        }
+        // we're done...
+        return;
+    }
+    //忽略绘制边缘渐隐效果的case
+}
+```
+
+我们关注 step3 draw the content, 其实就是调用View.onDraw(canvas) 将绘制命令记录在DisPlayList里面，我们以ImageView为例：
+
+```java
+//core\java\android\widget\ImageView.java
+@Override
+protected void onDraw(Canvas canvas) {
+    super.onDraw(canvas);
+    if (mDrawMatrix == null && mPaddingTop == 0 && mPaddingLeft == 0) {
+        mDrawable.draw(canvas);
+    } else {
+        //...
+    }
+}
+```
+
+mDrawable假设为BitmapDrawable
+
+```java
+//graphics\java\android\graphics\drawable\BitmapDrawable.java
+@Override
+public void draw(Canvas canvas) {
+    final Bitmap bitmap = mBitmapState.mBitmap;
+    //...
+    final Shader shader = paint.getShader();
+    final boolean needMirroring = needMirroring();
+    if (shader == null) {
+        //核心方法
+        canvas.drawBitmap(bitmap, null, mDstRect, paint);
+    } else {
+        //...
+    }
+
+}
+```
+
+实际这里调用了canvas.drawBitmap(bitmap, null, mDstRect, paint);
+
+canvas是从renderNode.beginRecording(width, height)获取的，实际为RecordingCanavas对象，对应的Native对象为SkiaRecordingCanavas
+
+```java
+//graphics\java\android\graphics\BaseCanvas.java
+public void drawBitmap(@NonNull Bitmap bitmap, @NonNull Matrix matrix, @Nullable Paint paint) {
+    throwIfHasHwBitmapInSwMode(paint);
+    nDrawBitmapMatrix(mNativeCanvasWrapper, bitmap.getNativeInstance(), matrix.ni(),
+            paint != null ? paint.getNativeInstance() : 0);
+}
+```
+
+```c++
+//core\jni\android_graphics_Canvas.cpp
+static void drawBitmapMatrix(JNIEnv* env, jobject, jlong canvasHandle, jlong bitmapHandle,
+                             jlong matrixHandle, jlong paintHandle) {
+    const SkMatrix* matrix = reinterpret_cast<SkMatrix*>(matrixHandle);
+    const Paint* paint = reinterpret_cast<Paint*>(paintHandle);
+    Bitmap& bitmap = android::bitmap::toBitmap(bitmapHandle);
+    get_canvas(canvasHandle)->drawBitmap(bitmap, *matrix, paint);
+}
+```
+
+可以看到从这里开始，就从java层转到了Native层
+
+```c++
+//libs\hwui\pipeline\skia\SkiaRecordingCanvas.cpp
+void SkiaRecordingCanvas::drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, const SkPaint* paint) {
+    SkAutoCanvasRestore acr(&mRecorder, true);
+    concat(matrix);
+    //bitmap转为SkImage对象
+    sk_sp<SkImage> image = bitmap.makeImage();
+    //mRecorder为RecordingCanvas对象
+    mRecorder.drawImage(image, 0, 0, filterBitmap(paint), bitmap.palette());
+    if (!bitmap.isImmutable() && image.get() && !image->unique()) {
+        mDisplayList->mMutableImages.push_back(image.get());
+    }
+}
+
+//libs\hwui\RecordingCanvas.cpp
+void RecordingCanvas::drawImage(const sk_sp<SkImage>& image, SkScalar x, SkScalar y,
+                                const SkPaint* paint, BitmapPalette palette) {
+    fDL->drawImage(image, x, y, paint, palette);
+}
+
+//libs\hwui\RecordingCanvas.cpp
+void DisplayListData::drawImage(sk_sp<const SkImage> image, SkScalar x, SkScalar y,
+                                const SkPaint* paint, BitmapPalette palette) {
+    this->push<DrawImage>(0, std::move(image), x, y, paint, palette);
+}
+```
+
+canvas.drawBitmap最终将一个drawImage操作存储到了DisplayListData当中。
 
 
+
+再看下
+renderNode.endRecording();
+setDisplayListProperties(renderNode);
+
+```java
+//graphics\java\android\graphics\RenderNode.java
+/**
+ * `
+ * Ends the recording for this display list. Calling this method marks
+ * the display list valid and {@link #hasDisplayList()} will return true.
+ *
+ * @see #beginRecording(int, int)
+ * @see #hasDisplayList()
+ */
+public void endRecording() {
+    //...
+    RecordingCanvas canvas = mCurrentRecordingCanvas;
+    mCurrentRecordingCanvas = null;
+    //获取到SkiaRecodingCanvas中的displayList指针地址
+    long displayList = canvas.finishRecording();
+    nSetDisplayList(mNativeRenderNode, displayList);
+    canvas.recycle();
+}
+```
+
+```c++
+//libs\hwui\pipeline\skia\SkiaRecordingCanvas.cpp
+uirenderer::DisplayList* SkiaRecordingCanvas::finishRecording() {
+    // close any existing chunks if necessary
+    insertReorderBarrier(false);
+    //减少一个计数状态
+    mRecorder.restoreToCount(1);
+    //从原有的持有者中释放该引用，并将指针返回
+    return mDisplayList.release();
+}
+```
+
+nSetDisplayList
+
+```c++
+//core\jni\android_view_RenderNode.cpp
+static void android_view_RenderNode_setDisplayList(JNIEnv* env,
+        jobject clazz, jlong renderNodePtr, jlong displayListPtr) {
+    RenderNode* renderNode = reinterpret_cast<RenderNode*>(renderNodePtr);
+    DisplayList* newData = reinterpret_cast<DisplayList*>(displayListPtr);
+    renderNode->setStagingDisplayList(newData);
+}
+
+//libs\hwui\RenderNode.cpp
+void RenderNode::setStagingDisplayList(DisplayList* displayList) {
+    mValid = (displayList != nullptr);
+    mNeedsDisplayListSync = true;
+    delete mStagingDisplayList;
+    mStagingDisplayList = displayList;
+}
+```
+
+最终将displayList存到了RenderNode.mStagingDisplayList当中， 每个RenderNode都会有自己的DisplayList
+
+canvas.recycle()
+
+```java
+//graphics\java\android\graphics\RecordingCanvas.java
+/** @hide */
+void recycle() {
+    //将RecordingCanvas当前操作的RenderNode引用置空
+    mNode = null;
+    sPool.release(this);
+}
+```
+
+
+
+**至此updateRootDisplayList的流程结束了，总结一下：**
+
+* **首先从跟view开始，调用updateDisplayListIfDirty，如果当前View的PFLAG_INVALIDATED标志位不为true，那么就会对其子view进行分发**
+* **分发到子view，如果子view调用了invalidate, 那么子view的PFLAG_INVALIDATED标志位为true，这会触发该子view对应的renderNode的displayList重建**
+* **重建过程是begingRecording获取到RecordingCanvas后，调用view的onDraw方法对RecordingCanvas进行操作，最后只能够的绘制操作就被记录到RecordingCanvas的displayList当中**
+* **重建结束后endRecording将displayList存储到renderNode.mStagingDisplayList当中, 从以上的分析我们也可以得知，只有调用invalidate的那个View及其 子view的RenderNode.mStagingDisplayList是非空的，其他的无需更新的View RenderNode.mStagingDisplayList会是空的**
 
 
 
 ##### 2.2.2.2、syncAndDrawFrame
 
+```java
+//graphics\java\android\graphics\HardwareRenderer.java
+@SyncAndDrawResult
+public int syncAndDrawFrame(@NonNull FrameInfo frameInfo) {
+    return nSyncAndDrawFrame(mNativeProxy, frameInfo.frameInfo, frameInfo.frameInfo.length);
+}
+```
 
+```c++
+//core\jni\android_view_ThreadedRenderer.cpp
+static int android_view_ThreadedRenderer_syncAndDrawFrame(JNIEnv* env, jobject clazz,
+        jlong proxyPtr, jlongArray frameInfo, jint frameInfoSize) {
+    RenderProxy* proxy = reinterpret_cast<RenderProxy*>(proxyPtr);
+    env->GetLongArrayRegion(frameInfo, 0, frameInfoSize, proxy->frameInfo());
+    return proxy->syncAndDrawFrame();
+}
+
+//libs\hwui\renderthread\RenderProxy.cpp
+int RenderProxy::syncAndDrawFrame() {
+    return mDrawFrameTask.drawFrame();
+}
+
+//libs\hwui\renderthread\DrawFrameTask.cpp
+int DrawFrameTask::drawFrame() {
+    mSyncResult = SyncResult::OK;
+    mSyncQueued = systemTime(CLOCK_MONOTONIC);
+    postAndWait();
+    return mSyncResult;
+}
+
+//libs\hwui\renderthread\DrawFrameTask.cpp
+void DrawFrameTask::postAndWait() {
+    AutoMutex _lock(mLock);
+    mRenderThread->queue().post([this]() { run(); });
+    //主线程阻塞等待
+    mSignal.wait(mLock);
+}
+
+//libs\hwui\renderthread\DrawFrameTask.cpp
+void DrawFrameTask::run() {
+    ATRACE_NAME("DrawFrame");
+
+    bool canUnblockUiThread;
+    bool canDrawThisFrame;
+    {
+        TreeInfo info(TreeInfo::MODE_FULL, *mContext);
+        //脏区域相关的逻辑核心看这里
+        canUnblockUiThread = syncFrameState(info);
+        canDrawThisFrame = info.out.canDrawThisFrame;
+        //真渲染完成回调注册相关代码
+    }
+
+    // Grab a copy of everything we need
+    CanvasContext* context = mContext;
+    std::function<void(int64_t)> callback = std::move(mFrameCallback);
+    mFrameCallback = nullptr;
+    // From this point on anything in "this" is *UNSAFE TO ACCESS*
+    if (canUnblockUiThread) {
+        //将阻塞的主线程唤醒
+        unblockUiThread();
+    }
+
+    // Even if we aren't drawing this vsync pulse the next frame number will still be accurate
+    if (CC_UNLIKELY(callback)) {
+        context->enqueueFrameWork(
+                [callback, frameNr = context->getFrameNumber()]() { callback(frameNr); });
+    }
+    if (CC_LIKELY(canDrawThisFrame)) {
+        //调用CanvasContext.draw，将DisplayList转为gpu指令
+        context->draw();
+    } else {
+        // wait on fences so tasks don't overlap next frame
+        context->waitOnFences();
+    }
+
+    if (!canUnblockUiThread) {
+        unblockUiThread();
+    }
+}
+```
+
+DrawFrameTask::run()主要包含两个核心操作，一个是syncFrameState(info)， 另一个是context->draw()
+
+syncFrameState主要是脏区域计算的逻辑相关，context->draw() 会调用各个RenderNodeDrawable将绘制指令转换为gpu指令。
+
+我们先看syncFrameState
+
+```c++
+//libs\hwui\renderthread\DrawFrameTask.cpp
+bool DrawFrameTask::syncFrameState(TreeInfo& info) {
+    ATRACE_CALL();
+    int64_t vsync = mFrameInfo[static_cast<int>(FrameInfoIndex::Vsync)];
+    mRenderThread->timeLord().vsyncReceived(vsync);
+    bool canDraw = mContext->makeCurrent();
+    mContext->unpinImages();
+    for (size_t i = 0; i < mLayers.size(); i++) {
+        //TextureView注册的DefferLayerUpdater的apply调用，这里从SurfaceTexture的BufferQueue中acquireBuffer获取到消息队列中的图形缓冲
+        mLayers[i]->apply();
+    }
+    //使用后清除
+    mLayers.clear();
+    mContext->setContentDrawBounds(mContentDrawBounds);
+    //关键操作
+    mContext->prepareTree(info, mFrameInfo, mSyncQueued, mTargetNode);
+    //...
+    // If prepareTextures is false, we ran out of texture cache space
+    return info.prepareTextures;
+}
+```
+
+这里的 mContext对象为CanvasContext.cpp对象
+
+```c++
+//libs\hwui\renderthread\CanvasContext.cpp
+void CanvasContext::prepareTree(TreeInfo& info, int64_t* uiFrameInfo, int64_t syncQueued,
+                                RenderNode* target) {
+    mRenderThread.removeFrameCallback(this);
+    if (!wasSkipped(mCurrentFrameInfo)) {
+        mCurrentFrameInfo = mJankTracker.startFrame();
+    }
+    mCurrentFrameInfo->importUiThreadInfo(uiFrameInfo);
+    mCurrentFrameInfo->set(FrameInfoIndex::SyncQueued) = syncQueued;
+    mCurrentFrameInfo->markSyncStart();
+	//获取到脏区域累加器，mDamageAccumulator是CanvasContext的成员变量
+    info.damageAccumulator = &mDamageAccumulator;
+    info.layerUpdateQueue = &mLayerUpdateQueue;
+    info.out.canDrawThisFrame = true;
+    //将mVectorDrawables清空
+    mRenderPipeline->onPrepareTree();
+    for (const sp<RenderNode>& node : mRenderNodes) {
+        // Only the primary target node will be drawn full - all other nodes would get drawn in real time mode. In case of a window, the primary node is the window content and the other node(s) are non client / filler nodes.
+        info.mode = (node.get() == target ? TreeInfo::MODE_FULL : TreeInfo::MODE_RT_ONLY);
+        //遍历每个node，执行prepareTree， 一般情况在CanvasContext的mRenderNodes中只有rootRenderNode，其他的renderNode是rootRenderNode继续来管理的，所以info.mode为TreeInfo::MODE_FUL
+        node->prepareTree(info);
+        GL_CHECKPOINT(MODERATE);
+    }
+    //...
+    mIsDirty = true;
+	//...
+}
+```
+
+核心 为遍历每个renderNode执行prepareTree
+
+```c++
+//libs\hwui\RenderNode.cpp
+void RenderNode::prepareTree(TreeInfo& info) {
+    ATRACE_CALL();
+    //...
+    prepareTreeImpl(observer, info, false);
+}
+
+//libs\hwui\RenderNode.cpp
+/**
+ * Traverse down the the draw tree to prepare for a frame.
+ * MODE_FULL = UI Thread-driven (thus properties must be synced), otherwise RT driven
+ * While traversing down the tree, functorsNeedLayer flag is set to true if anything that uses the stencil buffer may be needed. Views that use a functor to draw will be forced onto a layer.
+ */
+//rootRenderNode触发的流程
+void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+    if (mDamageGenerationId == info.damageGenerationId) {
+        // We hit the same node a second time in the same tree. We don't know the minimal damage rect anymore, so just push the biggest we can onto our parent's transform, We push directly onto parent in case we are clipped to bounds but have moved position.
+        info.damageAccumulator->dirty(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
+    }
+    info.damageAccumulator->pushTransform(this);
+
+    if (info.mode == TreeInfo::MODE_FULL) {
+        //rootRenderNode更新
+        pushStagingPropertiesChanges(info);
+    }
+
+    bool willHaveFunctor = false;
+    if (info.mode == TreeInfo::MODE_FULL && mStagingDisplayList) {
+        willHaveFunctor = mStagingDisplayList->hasFunctor();
+    } else if (mDisplayList) {
+        willHaveFunctor = mDisplayList->hasFunctor();
+    }
+    prepareLayer(info, animatorDirtyMask);
+    if (info.mode == TreeInfo::MODE_FULL) {
+        //rootRenderNode更新
+        pushStagingDisplayListChanges(observer, info);
+    }
+
+    if (mDisplayList) {
+        //后续的绘制中mDisplayList不会被情况，如果有更新 mStagingDisplayList会把mDisplayList更新掉
+        info.out.hasFunctors |= mDisplayList->hasFunctor();
+        //遍历子View返回是否dirty
+        bool isDirty = mDisplayList->prepareListAndChildren(
+                observer, info, childFunctorsNeedLayer,
+                [](RenderNode* child, TreeObserver& observer, TreeInfo& info,
+                   bool functorsNeedLayer) {
+                    child->prepareTreeImpl(observer, info, functorsNeedLayer);
+                });
+        if (isDirty) {
+            damageSelf(info);
+        }
+    }
+    pushLayerUpdate(info);
+
+    if (!mProperties.getAllowForceDark()) {
+        info.disableForceDark--;
+    }
+    info.damageAccumulator->popTransform();
+}
+```
+
+可以看到RootRenderNode触发各个子View的prepareTreeImpl，是一个递归的写法
+
+prepareListAndChildren
+
+```c++
+//libs\hwui\pipeline\skia\SkiaDisplayList.cpp
+bool SkiaDisplayList::prepareListAndChildren(
+        TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer,
+        std::function<void(RenderNode*, TreeObserver&, TreeInfo&, bool)> childFn) {
+
+    bool hasBackwardProjectedNodesHere = false;
+    bool hasBackwardProjectedNodesSubtree = false;
+	
+    //假设没有子view，这里可以忽略
+    for (auto& child : mChildNodes) {
+        hasBackwardProjectedNodesHere |= child.getNodeProperties().getProjectBackwards();
+        RenderNode* childNode = child.getRenderNode();
+        Matrix4 mat4(child.getRecordedMatrix());
+        info.damageAccumulator->pushTransform(&mat4);
+        info.hasBackwardProjectedNodes = false;
+        //执行每个子View的prepareTreeImpl
+        childFn(childNode, observer, info, functorsNeedLayer);
+        hasBackwardProjectedNodesSubtree |= info.hasBackwardProjectedNodes;
+        info.damageAccumulator->popTransform();
+    }
+
+    info.hasBackwardProjectedNodes =
+                hasBackwardProjectedNodesSubtree || hasBackwardProjectedNodesHere;
+
+    bool isDirty = false;
+    for (auto& animatedImage : mAnimatedImages) {
+        nsecs_t timeTilNextFrame = TreeInfo::Out::kNoAnimatedImageDelay;
+        // If any animated image in the display list needs updated, then damage the node. 如果有animatedImage，则直接标记为true
+        if (animatedImage->isDirty(&timeTilNextFrame)) {
+            isDirty = true;
+        }
+        //...
+    }
+
+    for (auto& vectorDrawablePair : mVectorDrawables) {
+        // If any vector drawable in the display list needs update, damage the node.
+        auto& vectorDrawable = vectorDrawablePair.first;
+        if (vectorDrawable->isDirty()) {
+            Matrix4 totalMatrix;
+            info.damageAccumulator->computeCurrentTransform(&totalMatrix);
+            Matrix4 canvasMatrix(vectorDrawablePair.second);
+            totalMatrix.multiply(canvasMatrix);
+            const SkRect& bounds = vectorDrawable->properties().getBounds();
+            if (intersects(info.screenSize, totalMatrix, bounds)) {
+                //如果相交则标记为dirty
+                isDirty = true;
+                static_cast<SkiaPipeline*>(info.canvasContext.getRenderPipeline())
+                        ->getVectorDrawables()
+                        ->push_back(vectorDrawable);
+                vectorDrawable->setPropertyChangeWillBeConsumed(true);
+            }
+        }
+    }
+    return isDirty;
+}
+```
 
