@@ -928,6 +928,7 @@ bool SkiaDisplayList::prepareListAndChildren(
  */
 //rootRenderNode触发的流程
 void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+    //将当前子节点入栈
     info.damageAccumulator->pushTransform(this);
 
     if (info.mode == TreeInfo::MODE_FULL) {
@@ -947,6 +948,7 @@ void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool fu
     }
 	//调用子view的prepareTreeImpl判断是否有脏区域的过程，假设没有子view可以先忽略
     pushLayerUpdate(info);
+    //将当前子节点出栈
     info.damageAccumulator->popTransform();
 }
 ```
@@ -984,6 +986,291 @@ void RenderNode::damageSelf(TreeInfo& info) {
             info.damageAccumulator->dirty(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
         }
     }
+}
+```
+
+
+
+
+
+
+
+##### 2.2.2.3、DmageAccumulator
+
+在执行每个renderNode.prepareTreeImpl时
+
+对damageAccumulator的操作一般为以下形式：
+
+```c++
+//libs\hwui\RenderNode.cpp
+void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+    //...
+    info.damageAccumulator->pushTransform(this);
+	//符合条件时
+	damageSelf(info);
+    //...
+    info.damageAccumulator->popTransform();
+}
+```
+
+这里涉及到了damageAccumulator的数据结构
+
+damageAccumulator内部维护了一个双向列表
+damageAccumulator->pushTransform：
+
+```c++
+//libs\hwui\RenderNode.cpp
+void DamageAccumulator::pushTransform(const RenderNode* transform) {
+    pushCommon();
+    mHead->type = TransformRenderNode;
+    mHead->renderNode = transform;
+}
+
+//libs\hwui\RenderNode.cpp
+void DamageAccumulator::pushCommon() {
+    if (!mHead->next) {
+        //mHead节点的next节点为空时，新建一个next节点
+        //next节点的左指针指向原来的头结点
+        DirtyStack* nextFrame = mAllocator.create_trivial<DirtyStack>();
+        nextFrame->next = nullptr;
+        nextFrame->prev = mHead;
+        mHead->next = nextFrame;
+    }
+    //并将头结点指针指向这个新建的next节点
+    mHead = mHead->next;
+    //新建节点后置空脏区域
+    mHead->pendingDirty.setEmpty();
+}
+```
+
+dirtyNode <---> dirtyNode <---> dirtyNode <---> dirtyNode <---> mHead
+
+链表结构大致如上
+
+```c++
+//libs\hwui\RenderNode.cpp
+void RenderNode::damageSelf(TreeInfo& info) {
+    if (isRenderable()) {
+        mDamageGenerationId = info.damageGenerationId;
+        if (properties().getClipDamageToBounds()) {
+            info.damageAccumulator->dirty(0, 0, properties().getWidth(), properties().getHeight());
+        } else {
+            // Hope this is big enough?
+            // TODO: Get this from the display list ops or something
+            info.damageAccumulator->dirty(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
+        }
+    }
+}
+
+//libs\hwui\DamageAccumulator.cpp
+void DamageAccumulator::dirty(float left, float top, float right, float bottom) {
+    mHead->pendingDirty.join(left, top, right, bottom);
+}
+```
+
+在RenderNode.damageSelf中，实际会将当前节点的脏区域累加上新的矩形区域，行程一个包含新的矩形与现有矩形的新矩形区域。
+
+damageAccumulator->popTransform();
+
+接下来就是出栈操作了：
+
+```c++
+//libs\hwui\DamageAccumulator.cpp
+void DamageAccumulator::popTransform() {
+    //先拿到当前头结点的引用
+    DirtyStack* dirtyFrame = mHead;
+    //将头指针移动回前一个，相当于让原来的头结点出栈
+    mHead = mHead->prev;
+    switch (dirtyFrame->type) {
+        case TransformRenderNode:
+            //关注这个case
+            applyRenderNodeTransform(dirtyFrame);
+            break;
+        case TransformMatrix4:
+            applyMatrix4Transform(dirtyFrame);
+            break;
+        case TransformNone:
+            mHead->pendingDirty.join(dirtyFrame->pendingDirty);
+            break;
+        default:
+            LOG_ALWAYS_FATAL("Tried to pop an invalid type: %d", dirtyFrame->type);
+    }
+}
+
+
+//libs\hwui\DamageAccumulator.cpp
+void DamageAccumulator::applyRenderNodeTransform(DirtyStack* frame) {
+    if (frame->pendingDirty.isEmpty()) {
+        //脏区域是空的，无需操作
+        return;
+    }
+    const RenderProperties& props = frame->renderNode->properties();
+    if (props.getAlpha() <= 0) {
+        //透明的节点无需操作
+        return;
+    }
+    // Perform clipping
+    if (props.getClipDamageToBounds() && !frame->pendingDirty.isEmpty()) {
+        //如果当前renderNode是支持clipBound的属性的，将脏区域限定在当前renderNode的宽高以内
+        if (!frame->pendingDirty.intersect(0, 0, props.getWidth(), props.getHeight())) {
+            //如果完全没有相交，相当于脏区域直接失效了
+            frame->pendingDirty.setEmpty();
+        }
+    }
+
+    // apply all transforms
+    //将计算出来的脏区域累积到新的头结点上，mHead指针在执行applyRenderNodeTransform之前已经往前移动了一位了
+    mapRect(props, frame->pendingDirty, &mHead->pendingDirty);
+    //投影相关的逻辑先忽略
+}
+```
+
+
+
+**阶段小结：每个rendernode执行prepareTreeImpl都伴随着DamageAccumulator的一次入栈与出栈的操作，入栈时会创建新节点，并将这个rendernode的脏区域记录在这个新节点上面，出栈时会将新的节点的脏区域累加到他的前一个节点上面，并且出栈后，头结点指针会指向最后累加的节点上面**
+
+
+
+##### 2.2.2.4  CanvasContext.draw
+
+syncFrameState结束后，所有的脏区域都会被累积在 脏区域累加器中 (TreeInfo.damageAccumulator)
+
+接下来就是真正的draw操作了：
+
+```c++
+//libs\hwui\renderthread\DrawFrameTask.cpp
+void DrawFrameTask::run() {
+    ATRACE_NAME("DrawFrame");
+
+    bool canUnblockUiThread;
+    bool canDrawThisFrame;
+    {
+        TreeInfo info(TreeInfo::MODE_FULL, *mContext);
+        //广度遍历每个renderNode并完成脏区域的统计操作
+        canUnblockUiThread = syncFrameState(info);
+    }
+
+    // Grab a copy of everything we need
+    CanvasContext* context = mContext;
+    if (canUnblockUiThread) {
+        //将阻塞的主线程唤醒，在syncFrameState时主线程是完全阻塞的
+        unblockUiThread();
+    }
+    if (CC_LIKELY(canDrawThisFrame)) {
+        //调用CanvasContext.draw，将DisplayList转为gpu指令
+        context->draw();
+    } else {
+        // wait on fences so tasks don't overlap next frame
+        context->waitOnFences();
+    }
+    if (!canUnblockUiThread) {
+        //再次唤醒 防止发生阻塞
+        unblockUiThread();
+    }
+}
+```
+
+CanvasContext.draw
+
+```c++
+//libs\hwui\renderthread\CanvasContext.cpp
+void CanvasContext::draw() {
+    SkRect dirty;
+    //获取到目前脏区域，最后是一个包含所有脏区域的一个大矩形
+    mDamageAccumulator.finish(&dirty);
+    if (dirty.isEmpty() && Properties::skipEmptyFrames && !surfaceRequiresRedraw()) {
+        //脏区域为空则跳过渲染
+        mCurrentFrameInfo->addFlag(FrameInfoFlags::SkippedFrame);
+        return;
+    }
+    //获取到当前窗口的脏区域
+    SkRect windowDirty = computeDirtyRect(frame, &dirty);
+    //使用mRenderPipeline开始绘制
+    bool drew = mRenderPipeline->draw(frame, windowDirty, dirty, mLightGeometry, &mLayerUpdateQueue,
+                                      mContentDrawBounds, mOpaque, mLightInfo, mRenderNodes,
+                                      &(profiler()));
+
+    int64_t frameCompleteNr = mFrameCompleteCallbacks.size() ? getFrameNumber() : -1;
+    waitOnFences();
+    bool requireSwap = false;
+    //将渲染好的数据提交到BufferQueue当中
+    bool didSwap =
+            mRenderPipeline->swapBuffers(frame, drew, windowDirty, mCurrentFrameInfo, &requireSwap);
+    //异常的case先忽略
+}
+```
+
+可以看到CanvasContext::draw关键的操作为：
+
+* 1、获取到最终的脏区域
+* 2、 mRenderPipeline->draw
+* 3、mRenderPipeline->swapBuffers
+
+
+
+可以看到mRenderPipeline的实现有有openGL 或者vulkan
+
+接下来我们以openGL 的场景展开
+
+
+
+### 3、SkiaOpenGLPipeline
+
+这里围绕SkiaOpenGLPipeline.draw 与 SkiaOpenGLPipeline.swapBuffers展开
+
+```c++
+//libs\hwui\pipeline\skia\SkiaOpenGLPipeline.cpp
+bool SkiaOpenGLPipeline::draw(const Frame& frame, const SkRect& screenDirty, const SkRect& dirty,
+                              const LightGeometry& lightGeometry,
+                              LayerUpdateQueue* layerUpdateQueue, const Rect& contentDrawBounds,
+                              bool opaque, const LightInfo& lightInfo,
+                              const std::vector<sp<RenderNode>>& renderNodes,
+                              FrameInfoVisualizer* profiler) {
+    mEglManager.damageFrame(frame, dirty);
+
+    SkColorType colorType = getSurfaceColorType();
+    // setup surface for fbo0
+    GrGLFramebufferInfo fboInfo;
+    fboInfo.fFBOID = 0;
+    if (colorType == kRGBA_F16_SkColorType) {
+        fboInfo.fFormat = GL_RGBA16F;
+    } else if (colorType == kN32_SkColorType) {
+        // Note: The default preference of pixel format is RGBA_8888, when other
+        // pixel format is available, we should branch out and do more check.
+        fboInfo.fFormat = GL_RGBA8;
+    } else {
+        LOG_ALWAYS_FATAL("Unsupported color type.");
+    }
+
+    GrBackendRenderTarget backendRT(frame.width(), frame.height(), 0, STENCIL_BUFFER_SIZE, fboInfo);
+
+    SkSurfaceProps props(0, kUnknown_SkPixelGeometry);
+
+    SkASSERT(mRenderThread.getGrContext() != nullptr);
+    sk_sp<SkSurface> surface(SkSurface::MakeFromBackendRenderTarget(
+            mRenderThread.getGrContext(), backendRT, this->getSurfaceOrigin(), colorType,
+            mSurfaceColorSpace, &props));
+
+    SkiaPipeline::updateLighting(lightGeometry, lightInfo);
+    renderFrame(*layerUpdateQueue, dirty, renderNodes, opaque, contentDrawBounds, surface,
+                SkMatrix::I());
+    layerUpdateQueue->clear();
+
+    // Draw visual debugging features
+    if (CC_UNLIKELY(Properties::showDirtyRegions ||
+                    ProfileType::None != Properties::getProfileType())) {
+        SkCanvas* profileCanvas = surface->getCanvas();
+        SkiaProfileRenderer profileRenderer(profileCanvas);
+        profiler->draw(profileRenderer);
+        profileCanvas->flush();
+    }
+
+    // Log memory statistics
+    if (CC_UNLIKELY(Properties::debugLevel != kDebugDisabled)) {
+        dumpResourceCacheUsage();
+    }
+
+    return true;
 }
 ```
 
