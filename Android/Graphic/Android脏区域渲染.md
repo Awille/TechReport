@@ -191,7 +191,7 @@ private boolean draw(boolean fullRedrawNeeded) {
             dirty.setEmpty();
             useAsyncReport = true;
             //mView为DecorView
-            mAttachInfo.mThreadedRenderer.draw(mView, mAttachInfo, this);
+            mAttachInfo.mThreadedRendere.draw(mView, mAttachInfo, this);
         } else {
             //异常场景与软件层渲染代码忽略 ...
         }
@@ -805,6 +805,7 @@ void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool fu
         // We hit the same node a second time in the same tree. We don't know the minimal damage rect anymore, so just push the biggest we can onto our parent's transform, We push directly onto parent in case we are clipped to bounds but have moved position.
         info.damageAccumulator->dirty(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
     }
+    //脏区域计算入栈
     info.damageAccumulator->pushTransform(this);
 
     if (info.mode == TreeInfo::MODE_FULL) {
@@ -825,13 +826,14 @@ void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool fu
     }
 
     if (mDisplayList) {
-        //后续的绘制中mDisplayList不会被情况，如果有更新 mStagingDisplayList会把mDisplayList更新掉
+        //后续的绘制中mDisplayList不会被清理，如果有更新 mStagingDisplayList会把mDisplayList更新掉
         info.out.hasFunctors |= mDisplayList->hasFunctor();
         //遍历子View返回是否dirty
         bool isDirty = mDisplayList->prepareListAndChildren(
                 observer, info, childFunctorsNeedLayer,
                 [](RenderNode* child, TreeObserver& observer, TreeInfo& info,
                    bool functorsNeedLayer) {
+                    //递归写法，递归遍历每个rendernode
                     child->prepareTreeImpl(observer, info, functorsNeedLayer);
                 });
         if (isDirty) {
@@ -843,6 +845,7 @@ void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool fu
     if (!mProperties.getAllowForceDark()) {
         info.disableForceDark--;
     }
+    //脏区域计算出栈
     info.damageAccumulator->popTransform();
 }
 ```
@@ -963,7 +966,7 @@ void RenderNode::pushStagingDisplayListChanges(TreeObserver& observer, TreeInfo&
         mNeedsDisplayListSync = false;
         // Damage with the old display list first then the new one to catch any
         // changes in isRenderable or, in the future, bounds
-        (info);
+        damageSelf(info);
         syncDisplayList(observer, &info);
         damageSelf(info);
     }
@@ -1123,6 +1126,25 @@ void DamageAccumulator::applyRenderNodeTransform(DirtyStack* frame) {
     mapRect(props, frame->pendingDirty, &mHead->pendingDirty);
     //投影相关的逻辑先忽略
 }
+
+
+static inline void mapRect(const RenderProperties& props, const SkRect& in, SkRect* out) {
+    if (in.isEmpty()) return;
+    const SkMatrix* transform = props.getTransformMatrix();
+    SkRect temp(in);
+    if (transform && !transform->isIdentity()) {
+        if (CC_LIKELY(!transform->hasPerspective())) {
+            transform->mapRect(&temp);
+        } else {
+            // Don't attempt to calculate damage for a perspective transform
+            // as the numbers this works with can break the perspective
+            // calculations. Just give up and expand to DIRTY_MIN/DIRTY_MAX
+            temp.set(DIRTY_MIN, DIRTY_MIN, DIRTY_MAX, DIRTY_MAX);
+        }
+    }
+    temp.offset(props.getLeft(), props.getTop());
+    out->join(temp);
+}
 ```
 
 
@@ -1216,7 +1238,7 @@ void CanvasContext::draw() {
 
 ### 3、SkiaOpenGLPipeline
 
-这里围绕SkiaOpenGLPipeline.draw 与 SkiaOpenGLPipeline.swapBuffers展开
+这里围绕SkiaOpenGLPipeline.draw 与 SkiaOpenGLPipeline.swapBuffers展开, 在开始这部分工作时，最好先补充下第三大节，有关EglManager的部分
 
 ```c++
 //libs\hwui\pipeline\skia\SkiaOpenGLPipeline.cpp
@@ -1226,8 +1248,8 @@ bool SkiaOpenGLPipeline::draw(const Frame& frame, const SkRect& screenDirty, con
                               bool opaque, const LightInfo& lightInfo,
                               const std::vector<sp<RenderNode>>& renderNodes,
                               FrameInfoVisualizer* profiler) {
+    //调用eglSetDamageRegionKHR 设置一个damage area，对应的egp命令为eglSetDamageRegionKHR
     mEglManager.damageFrame(frame, dirty);
-
     SkColorType colorType = getSurfaceColorType();
     // setup surface for fbo0
     GrGLFramebufferInfo fboInfo;
@@ -1252,6 +1274,7 @@ bool SkiaOpenGLPipeline::draw(const Frame& frame, const SkRect& screenDirty, con
             mSurfaceColorSpace, &props));
 
     SkiaPipeline::updateLighting(lightGeometry, lightInfo);
+    //核心是这里
     renderFrame(*layerUpdateQueue, dirty, renderNodes, opaque, contentDrawBounds, surface,
                 SkMatrix::I());
     layerUpdateQueue->clear();
@@ -1274,3 +1297,381 @@ bool SkiaOpenGLPipeline::draw(const Frame& frame, const SkRect& screenDirty, con
 }
 ```
 
+SkiaOpenGLPipeline::draw的核心就是伪代码为：
+
+```c++
+//标记脏区域
+mEglManager.damageFrame(frame, dirty);
+//渲染
+renderFrame(*layerUpdateQueue, dirty, renderNodes, opaque, contentDrawBounds, surface,
+                SkMatrix::I());
+    layerUpdateQueue->clear();
+```
+
+标记脏区域对应一个opengl指令为：eglSetDamageRegionKHR
+
+```c++
+//libs\hwui\pipeline\skia\SkiaPipeline.cpp
+void SkiaPipeline::renderFrame(const LayerUpdateQueue& layers, const SkRect& clip,
+                               const std::vector<sp<RenderNode>>& nodes, bool opaque,
+                               const Rect& contentDrawBounds, sk_sp<SkSurface> surface,
+                               const SkMatrix& preTransform) {
+   //...
+
+    // draw all layers up front
+    renderLayersImpl(layers, opaque);
+
+    // initialize the canvas for the current frame, that might be a recording canvas if SKP
+    // capture is enabled.
+    std::unique_ptr<SkPictureRecorder> recorder;
+    SkCanvas* canvas = tryCapture(surface.get());
+    //将绘制操作转为真正的opengl指令
+    renderFrameImpl(layers, clip, nodes, opaque, contentDrawBounds, canvas, preTransform);
+
+    endCapture(surface.get());
+
+    if (CC_UNLIKELY(Properties::debugOverdraw)) {
+        //过度绘制debug界面
+        renderOverdraw(layers, clip, nodes, contentDrawBounds, surface, preTransform);
+    }
+
+    ATRACE_NAME("flush commands");
+    //opengl的指令真正执行
+    surface->getCanvas()->flush();
+
+    Properties::skpCaptureEnabled = previousSkpEnabled;
+}
+```
+
+
+
+怎么理解这里的layer，这里可以看到layer都是对应LayerUpdateQueue，这个是CanvasContext中一路持有传递下来的，CanvasContext中，持有了一个对象叫 LayerUpdateQueue mLayerUpdateQueue， 可以看下这里是怎么操作者变量的
+
+```c++
+//libs\hwui\LayerUpdateQueue.h
+class LayerUpdateQueue {
+    PREVENT_COPY_AND_ASSIGN(LayerUpdateQueue);
+
+public:
+    struct Entry {
+        Entry(RenderNode* renderNode, const Rect& damage)
+                : renderNode(renderNode), damage(damage) {}
+        sp<RenderNode> renderNode;
+        Rect damage;
+    };
+
+    LayerUpdateQueue() {}
+    void enqueueLayerWithDamage(RenderNode* renderNode, Rect dirty);
+    void clear();
+    const std::vector<Entry>& entries() const { return mEntries; }
+
+private:
+    std::vector<Entry> mEntries;
+};
+```
+
+mLayerUpdateQueue主要是存储了一个列表，列表的每个entry持有了 rendernode和renderNode对应的脏区域，mLayerUpdateQueue被CanvasContext持有，并在调用rendernode.prepareTreeImpl中，传递给了TreeInfo， 而RenderNode中，调用pushLayerUpdate(TreeInfo& info)时，对mLayerUpdateQueue进行了更新
+
+```c++
+//libs\hwui\RenderNode.cpp
+void RenderNode::prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer) {
+    //...
+    info.damageAccumulator->pushTransform(this);
+    //这里的preparLayer,如果你单独设置View.LayerType为硬件层，则layerType会在这里单独计算脏区域
+    prepareLayer(info, animatorDirtyMask);
+  	//... (这里如果layerType为HardwareLayer内部默认是不会走的)
+    pushLayerUpdate(info);
+    //...
+    info.damageAccumulator->popTransform();
+}
+
+void RenderNode::pushLayerUpdate(TreeInfo& info) {
+    LayerType layerType = properties().effectiveLayerType();
+    if (info.canvasContext.createOrUpdateLayer(this, *info.damageAccumulator, info.errorHandler)) {
+        damageSelf(info);
+    }
+
+    if (!hasLayer()) {
+        return;
+    }
+
+    SkRect dirty;
+    info.damageAccumulator->peekAtDirty(&dirty);
+    //入队
+    info.layerUpdateQueue->enqueueLayerWithDamage(this, dirty);
+}
+```
+
+
+
+所以可以看到SkiaPipeline::renderFrame的核心流程为：
+
+```c++
+//libs\hwui\pipeline\skia\SkiaPipeline.cpp
+void SkiaPipeline::renderFrame(const LayerUpdateQueue& layers, const SkRect& clip,
+                               const std::vector<sp<RenderNode>>& nodes, bool opaque,
+                               const Rect& contentDrawBounds, sk_sp<SkSurface> surface,
+                               const SkMatrix& preTransform) {
+   //...
+    // 将绘制操作转为真正的opengl指令
+    renderLayersImpl(layers, opaque);
+    renderFrameImpl(layers, clip, nodes, opaque, contentDrawBounds, canvas, preTransform);
+
+    if (CC_UNLIKELY(Properties::debugOverdraw)) {
+        //过度绘制debug界面
+        renderOverdraw(layers, clip, nodes, contentDrawBounds, surface, preTransform);
+    }
+    ATRACE_NAME("flush commands");
+    //opengl的指令真正执行
+    surface->getCanvas()->flush();
+}
+```
+
+先看看renderLayerImpl的操作
+
+```c++
+//libs\hwui\pipeline\skia\SkiaPipeline.cpp
+void SkiaPipeline::renderLayersImpl(const LayerUpdateQueue& layers, bool opaque) {
+    // Render all layers that need to be updated, in order.
+    for (size_t i = 0; i < layers.entries().size(); i++) {
+        //获取每个要更新的renderNode
+        RenderNode* layerNode = layers.entries()[i].renderNode.get();
+        // only schedule repaint if node still on layer - possible it may have been
+        // removed during a dropped frame, but layers may still remain scheduled so
+        // as not to lose info on what portion is damaged
+        if (CC_LIKELY(layerNode->getLayerSurface() != nullptr)) {
+            SkASSERT(layerNode->getLayerSurface());
+            //获取displayList
+            SkiaDisplayList* displayList = (SkiaDisplayList*)layerNode->getDisplayList();
+            //获取脏区域
+            const Rect& layerDamage = layers.entries()[i].damage;
+			
+            SkCanvas* layerCanvas = layerNode->getLayerSurface()->getCanvas();
+
+            int saveCount = layerCanvas->save();
+            SkASSERT(saveCount == 1);
+			//...
+            ATRACE_FORMAT("drawLayer [%s] %.1f x %.1f", layerNode->getName(), bounds.width(),
+                          bounds.height());
+            //将renderNode转成RenderNodeDrawable
+            RenderNodeDrawable root(layerNode, layerCanvas, false);
+            //执行实际的draw过程
+            root.forceDraw(layerCanvas);
+            layerCanvas->restoreToCount(saveCount);
+        }
+    }
+}
+```
+
+这里实际调用是RenderNodeDrawable.forceDraw
+
+```c++
+//libs\hwui\pipeline\skia\RenderNodeDrawable.cpp
+
+void RenderNodeDrawable::forceDraw(SkCanvas* canvas) {
+    RenderNode* renderNode = mRenderNode.get();
+    SkiaDisplayList* displayList = (SkiaDisplayList*)renderNode->getDisplayList();
+
+    SkAutoCanvasRestore acr(canvas, true);
+    const RenderProperties& properties = this->getNodeProperties();
+    if (!properties.getProjectBackwards()) {
+        drawContent(canvas);
+    }
+}
+
+//drawcontent
+void RenderNodeDrawable::drawContent(SkCanvas* canvas) const {
+    RenderNode* renderNode = mRenderNode.get();
+    const RenderProperties& properties = renderNode->properties();
+    SkiaDisplayList* displayList = (SkiaDisplayList*)mRenderNode->getDisplayList();
+    displayList->mParentMatrix = canvas->getTotalMatrix();
+    const SkRect bounds = SkRect::MakeWH(properties.getWidth(), properties.getHeight());
+    bool quickRejected = properties.getClipToBounds() && canvas->quickReject(bounds);
+    if (!quickRejected) {
+        SkiaDisplayList* displayList = (SkiaDisplayList*)renderNode->getDisplayList();
+        const LayerProperties& layerProperties = properties.layerProperties();
+        // composing a hardware layer
+        if (renderNode->getLayerSurface() && mComposeLayer) {
+            //单独硬件层的渲染
+            SkASSERT(properties.effectiveLayerType() == LayerType::RenderLayer);
+            SkPaint paint;
+            layerNeedsPaint(layerProperties, alphaMultiplier, &paint);
+            canvas->drawImageRect(renderNode->getLayerSurface()->makeImageSnapshot().get(), bounds, bounds, &paint);
+
+            if (!renderNode->getSkiaLayer()->hasRenderedSinceRepaint) {
+                renderNode->getSkiaLayer()->hasRenderedSinceRepaint = true;
+                if (CC_UNLIKELY(Properties::debugLayersUpdates)) {
+                    SkPaint layerPaint;
+                    layerPaint.setColor(0x7f00ff00);
+                    canvas->drawRect(bounds, layerPaint);
+                } else if (CC_UNLIKELY(Properties::debugOverdraw)) {
+                    // Render transparent rect to increment overdraw for repaint area.
+                    // This can be "else if" because flashing green on layer updates
+                    // will also increment the overdraw if it happens to be turned on.
+                    SkPaint transparentPaint;
+                    transparentPaint.setColor(SK_ColorTRANSPARENT);
+                    canvas->drawRect(bounds, transparentPaint);
+                }
+            }
+        } else {
+            if (alphaMultiplier < 1.0f) {
+                // Non-layer draw for a view with getHasOverlappingRendering=false, will apply
+                // the alpha to the paint of each nested draw.
+                AlphaFilterCanvas alphaCanvas(canvas, alphaMultiplier);
+                displayList->draw(&alphaCanvas);
+            } else {
+                displayList->draw(canvas);
+            }
+        }
+    }
+}
+
+```
+
+看renderFrameImpl的操作
+
+```c++
+//libs\hwui\pipeline\skia\SkiaPipeline.cpp
+void SkiaPipeline::renderFrameImpl(const LayerUpdateQueue& layers, const SkRect& clip,
+                                   const std::vector<sp<RenderNode>>& nodes, bool opaque,
+                                   const Rect& contentDrawBounds, SkCanvas* canvas,
+                                   const SkMatrix& preTransform) {
+    SkAutoCanvasRestore saver(canvas, true);
+    canvas->androidFramework_setDeviceClipRestriction(preTransform.mapRect(clip).roundOut());
+    canvas->concat(preTransform);
+
+    // STOPSHIP: Revert, temporary workaround to clear always F16 frame buffer for b/74976293
+    if (!opaque || getSurfaceColorType() == kRGBA_F16_SkColorType) {
+        canvas->clear(SK_ColorTRANSPARENT);
+    }
+
+    if (1 == nodes.size()) {
+        //SkiaPipeline只持有了rootRenderNode，所以其他case可以忽略
+        if (!nodes[0]->nothingToDraw()) {
+            RenderNodeDrawable root(nodes[0].get(), canvas);
+            root.draw(canvas);
+        }
+    } 
+}
+```
+
+最后实际也只是调用的RenderNodeDrawable.draw
+
+
+
+### 3、drawContent(GPU命令绘制转换)
+
+在RenderNodeDrawable中，drawcontent的核心操作可以理解为
+
+```c++
+//libs\hwui\pipeline\skia\RenderNodeDrawable.cpp
+void RenderNodeDrawable::drawContent(SkCanvas* canvas) const {
+    RenderNode* renderNode = mRenderNode.get();
+    float alphaMultiplier = 1.0f;
+    const RenderProperties& properties = renderNode->properties();
+    SkiaDisplayList* displayList = (SkiaDisplayList*)mRenderNode->getDisplayList();
+    displayList->mParentMatrix = canvas->getTotalMatrix();
+
+    // TODO should we let the bound of the drawable do this for us?
+    const SkRect bounds = SkRect::MakeWH(properties.getWidth(), properties.getHeight());
+    bool quickRejected = properties.getClipToBounds() && canvas->quickReject(bounds);
+    if (!quickRejected) {
+        SkiaDisplayList* displayList = (SkiaDisplayList*)renderNode->getDisplayList();
+            if (alphaMultiplier < 1.0f) {
+                // Non-layer draw for a view with getHasOverlappingRendering=false, will apply
+                // the alpha to the paint of each nested draw.
+                AlphaFilterCanvas alphaCanvas(canvas, alphaMultiplier);
+                displayList->draw(&alphaCanvas);
+            } else {
+                displayList->draw(canvas);
+            }        
+}
+```
+
+实际对应displayList->draw
+
+```c++
+//libs\hwui\pipeline\skia\SkiaDisplayList.h
+void draw(SkCanvas* canvas) { mDisplayList.draw(canvas); }
+
+//libs\hwui\RecordingCanvas.cpp
+void DisplayListData::draw(SkCanvas* canvas) const {
+    SkAutoCanvasRestore acr(canvas, false);
+    this->map(draw_fns, canvas, canvas->getTotalMatrix());
+}
+
+template <typename Fn, typename... Args>
+inline void DisplayListData::map(const Fn fns[], Args... args) const {
+    auto end = fBytes.get() + fUsed;
+    for (const uint8_t* ptr = fBytes.get(); ptr < end;) {
+        auto op = (const Op*)ptr;
+        auto type = op->type;
+        auto skip = op->skip;
+        if (auto fn = fns[type]) {  // We replace no-op functions with nullptrs
+            fn(op, args...);        // to avoid the overhead of a pointless call.
+        }
+        ptr += skip;
+    }
+}
+```
+
+实际执行的draw_fns的函数， 对应为DrawVectorDrawable
+
+```c++
+//libs\hwui\RecordingCanvas.cpp
+struct DrawVectorDrawable final : Op {
+    static const auto kType = Type::DrawVectorDrawable;
+    DrawVectorDrawable(VectorDrawableRoot* tree)
+            : mRoot(tree)
+            , mBounds(tree->stagingProperties().getBounds())
+            , palette(tree->computePalette()) {
+        // Recording, so use staging properties
+        tree->getPaintFor(&paint, tree->stagingProperties());
+    }
+
+    void draw(SkCanvas* canvas, const SkMatrix&) const { mRoot->draw(canvas, mBounds, paint); }
+
+    sp<VectorDrawableRoot> mRoot;
+    SkRect mBounds;
+    SkPaint paint;
+    BitmapPalette palette;
+};
+}
+```
+
+
+
+## 3、EglManager
+
+`EglManager` 是 Android 中一个用于处理 EGL（嵌入式图形库）上下文和显示的管理类，主要用于图形渲染，尤其是在使用 OpenGL ES 的应用程序中。它的功能主要包括：
+
+1. **创建和管理 EGL 上下文**：`EglManager` 负责创建和管理 OpenGL ES 上下文，使得应用程序能够进行图形渲染。
+2. **处理显示和表面**：它能够处理与显示相关的操作，包括创建绘制表面和管理显示设备。
+3. **资源管理**：在图形渲染过程中，`EglManager` 可以帮助管理 GPU 资源的生命周期，确保资源的有效使用。
+4. **错误处理**：提供了一些方法来检查和处理与 EGL 相关的错误，确保渲染过程的稳定性。
+
+通常，`EglManager` 是在使用 OpenGL ES 进行图形开发时的一个重要组成部分，尤其是在需要高性能渲染的应用场景中。使用 `EglManager` 可以简化 EGL 的使用，使开发者能够专注于图形内容的渲染而不是底层的上下文管理。
+
+
+
+
+
+先要了解几个部分，第一部分为EGL上下文
+
+### 3.1、EGL上下文
+
+EglContext
+
+EglConfig
+
+EglDisplay
+
+
+
+
+
+## 4、View.setLayerType有什么作用
+
+
+
+https://androidperformance.com/2019/07/27/Android-Hardware-Layer/
